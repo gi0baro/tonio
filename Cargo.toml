@@ -1,0 +1,50 @@
+[package]
+name = "tonio"
+version = "0.1.0-alpha1"
+description = "A multi-threaded async runtime"
+authors = ["Giovanni Barillari <g@baro.dev>"]
+license = "BSD-3-Clause"
+edition = "2024"
+
+keywords = ["async", "io", "threading", "networking"]
+
+readme = "README.md"
+homepage = "https://github.com/gi0baro/tonio"
+repository = "https://github.com/gi0baro/tonio"
+
+include = [
+    "/Cargo.toml",
+    "/pyproject.toml",
+    "/LICENSE",
+    "/README.md",
+    "/src",
+    "/tonio",
+    "/tests",
+    "!__pycache__",
+    "!tests/.pytest_cache",
+    "!*.so",
+]
+
+[lib]
+name = "_tonio"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+anyhow = "=1.0"
+crossbeam-channel = "0.5"
+mio = { version = "=1.1", features = ["net", "os-ext", "os-poll"] }
+papaya = "=0.2"
+pyo3 = { version = "=0.27", features = ["anyhow", "extension-module", "generate-import-lib"] }
+socket2 = { version = "=0.6", features = ["all"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.159"
+
+[profile.release]
+codegen-units = 1
+debug = false
+incremental = false
+lto = "fat"
+opt-level = 3
+panic = "abort"
+strip = true
