@@ -1,0 +1,29 @@
+name: lint
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+    branches:
+      - master
+
+env:
+  UV_PYTHON: 3.14
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v5
+    - uses: astral-sh/setup-uv@v6
+      with:
+        enable-cache: false
+    - name: Install
+      run: |
+        uv python install ${{ env.UV_PYTHON }}
+        uv venv .venv
+        uv sync --group lint
+    - name: Lint
+      run: |
+        source .venv/bin/activate
+        make lint

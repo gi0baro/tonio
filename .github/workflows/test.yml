@@ -1,0 +1,63 @@
+name: test
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+    branches:
+      - master
+  push:
+    branches:
+      - master
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+        - '3.14t'
+
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
+    steps:
+    - uses: actions/checkout@v5
+    - uses: astral-sh/setup-uv@v6
+      with:
+        enable-cache: false
+    - name: Install
+      run: |
+        uv python install ${{ env.UV_PYTHON }}
+        uv venv .venv
+        uv sync --group build --group test
+        uv run --no-sync maturin develop --uv
+    - name: Test
+      run: |
+        source .venv/bin/activate
+        make test
+
+  macos:
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+        - '3.14t'
+
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
+    steps:
+    - uses: actions/checkout@v5
+    - uses: astral-sh/setup-uv@v6
+      with:
+        enable-cache: false
+    - name: Install
+      run: |
+        uv python install ${{ env.UV_PYTHON }}
+        uv venv .venv
+        uv sync --group build --group test
+        uv run --no-sync maturin develop --uv --extras=test
+    - name: Test
+      run: |
+        source .venv/bin/activate
+        make test
