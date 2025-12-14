@@ -306,6 +306,33 @@ async def main():
     await event()
 ```
 
+The only major syntax difference between the `yield` and `async/await` notation is around `with` blocks:
+
+```python
+from tonio.sync import Lock
+
+lock = Lock()
+
+def yield_lock():
+    with (yield lock()):
+        # do something
+
+def async_lock():
+    async with lock:
+        # do something
+```
+
+Also, the `colored` module provides the additional `yield_now` awaitable function, a quick way to define a suspension point:
+
+```python
+import tonio.colored as tonio
+
+@tonio.main
+async def main():
+    await tonio.yield_now()
+    print("hello world")
+```
+
 ## License
 
 TonIO is released under the BSD License.
