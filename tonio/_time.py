@@ -9,7 +9,7 @@ from ._types import Coro
 _T = TypeVar('_T')
 
 
-def clock() -> int:
+def time() -> int:
     return get_runtime()._clock
 
 

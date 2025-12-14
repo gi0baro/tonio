@@ -33,9 +33,9 @@ def test_semaphore(run):
 def test_lock(run):
     counter = 0
 
-    def _count(semaphore, i):
+    def _count(lock, i):
         nonlocal counter
-        with (yield semaphore()):
+        with (yield lock()):
             counter += 1
             if counter > 1:
                 raise RuntimeError
@@ -44,8 +44,8 @@ def test_lock(run):
         return i
 
     def _run():
-        semaphore = tonio.sync.Lock()
-        out = yield tonio.spawn(*[_count(semaphore, i) for i in range(50)])
+        lock = tonio.sync.Lock()
+        out = yield tonio.spawn(*[_count(lock, i) for i in range(50)])
         return out
 
     assert run(_run()) == list(range(50))
@@ -55,7 +55,7 @@ def test_barrier(run):
     barrier = tonio.sync.Barrier(3)
     count = 0
 
-    def _foo():
+    def _count():
         nonlocal count
         count += 1
         i = yield barrier.wait()
@@ -64,7 +64,7 @@ def test_barrier(run):
         return i
 
     def _run():
-        out = yield tonio.spawn(*[_foo() for _ in range(3)])
+        out = yield tonio.spawn(*[_count() for _ in range(3)])
         return out
 
     assert set(run(_run())) == {0, 1, 2}
