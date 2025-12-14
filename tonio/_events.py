@@ -6,6 +6,6 @@ class Event(_Event):
         timeout = round(max(0, timeout * 1_000_000)) if timeout else timeout
         yield self.waiter(timeout)
 
-    async def __call__(self, timeout: int | float | None = None):
+    def __call__(self, timeout: int | float | None = None):
         timeout = round(max(0, timeout * 1_000_000)) if timeout else timeout
-        await self.waiter(timeout)
+        return self.waiter(timeout)

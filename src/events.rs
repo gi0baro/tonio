@@ -228,19 +228,23 @@ impl Waiter {
     }
 
     fn __await__(pyself: Py<Self>) -> Py<Self> {
+        // println!("Waiter AWAIT {pyself:?}");
         pyself
     }
 
     fn __next__(pyself: Py<Self>) -> Option<Py<Self>> {
-        // match pyself.get().state.load(atomic::Ordering::Acquire) {
-        //     0 => Some(pyself),
-        //     _ => None,
-        // }
         match pyself.get().registered.load(atomic::Ordering::Acquire) {
             false => Some(pyself),
             true => None,
         }
     }
+
+    fn send(&self, value: Py<PyAny>) -> PyResult<Py<PyAny>> {
+        // println!("Waiter SEND {value:?}");
+        Err(pyo3::exceptions::PyStopIteration::new_err(value))
+    }
+
+    // TODO: throw?
 }
 
 #[pyclass(frozen, module = "tonio._tonio")]
@@ -395,7 +399,14 @@ impl Suspension {
                 };
                 Box::new(handle)
             }
-            SuspensionTarget::PyAsyncGen(_) => panic!(),
+            SuspensionTarget::PyAsyncGen(target) => {
+                let handle = PyGenThrower {
+                    parent: self.parent.clone(),
+                    coro: target.clone_ref(py),
+                    value,
+                };
+                Box::new(handle)
+            },
         }
     }
 
@@ -406,9 +417,9 @@ impl Suspension {
     }
 
     pub fn resume(&self, py: Python, runtime: &Runtime, value: Py<PyAny>, order: usize) {
-        // println!("suspension resume call {:?}", value.bind(py));
         if let Some(sentinel) = &self.sentinel {
             if let Some(composed_value) = sentinel.decrement(py, (order, value)) {
+                // println!("suspension resume call SENTINEL {:?}", composed_value.bind(py));
                 runtime.add_handle(self.to_handle(py, composed_value));
             }
             return;
@@ -418,6 +429,7 @@ impl Suspension {
             .compare_exchange(false, true, atomic::Ordering::Release, atomic::Ordering::Relaxed)
             .is_ok()
         {
+            // println!("suspension resume call {:?}", value.bind(py));
             runtime.add_handle(self.to_handle(py, value));
         }
     }

@@ -175,7 +175,7 @@ impl PyAsyncGenHandle {
     }
 
     fn call(&self, py: Python, runtime: Py<Runtime>) {
-        // println!("async coro iteration step {:?}", self.coro);
+        // println!("async coro iteration step {:?} {:?}", self.coro.bind(py), self.value.bind(py));
 
         unsafe {
             let mut ret = std::ptr::null_mut::<pyo3::ffi::PyObject>();
@@ -183,7 +183,7 @@ impl PyAsyncGenHandle {
 
             match result {
                 pyo3::ffi::PySendResult::PYGEN_NEXT => {
-                    // println!("PYGEN_NEXT");
+                    // println!("PYGEN_NEXT {:?}", self.coro.bind(py));
 
                     // if it's just a `yield`, reschedule
                     if ret == py.None().as_ptr() {
@@ -195,7 +195,7 @@ impl PyAsyncGenHandle {
 
                     // if it's a generator, schedule it to the loop, keeping track of where we came from
                     if pyo3::ffi::PyAsyncGen_CheckExact(ret) != 0 {
-                        // println!("GOT ASYNCGEN");
+                        println!("GOT ASYNCGEN");
                         let coro = Bound::from_owned_ptr(py, ret);
                         let parent = Suspension::from_pyasyncgen(py, self, None);
                         let next = PyAsyncGenHandle {
@@ -209,15 +209,16 @@ impl PyAsyncGenHandle {
 
                     // otherwise, can only be a waiter
                     if let Ok(waiter) = Bound::from_owned_ptr(py, ret).extract::<Py<Waiter>>() {
+                        // println!("PYGEN_NEXT regwait {:?} {:?}", self.coro.bind(py), waiter.bind(py));
                         Waiter::register_pyasyncgen(waiter, py, runtime.clone_ref(py), self);
                         return;
                     }
 
-                    // if we get here, we should raise/throw an error somehow
+                    println!("GOING TO PANIC {:?}", Bound::from_owned_ptr(py, ret));
                     panic!()
                 }
                 pyo3::ffi::PySendResult::PYGEN_RETURN => {
-                    // println!("PYGEN_RETURN");
+                    // println!("PYGEN_RETURN {:?}", self.coro.bind(py));
                     if let Some((suspension, idx)) = &self.parent {
                         let obj = Bound::from_owned_ptr(py, ret);
                         // println!("WAKE FROM PYGEN_RETURN {obj:?}");
@@ -225,11 +226,16 @@ impl PyAsyncGenHandle {
                     }
                 }
                 pyo3::ffi::PySendResult::PYGEN_ERROR => {
-                    // we should raise somehow
-                    // println!("PYGEN_ERR {ret:?}");
+                    // println!("PYGEN_ERR {:?}", self.coro.bind(py));
                     let err = pyo3::PyErr::fetch(py);
-                    // println!("LAST ERR {err:?}");
-                    err.display(py);
+                    if let Some((suspension, _idx)) = &self.parent {
+                        // println!("WAKE FROM PYGEN_ERROR {:?}", self.coro.bind(py));
+                        suspension.error(py, runtime.get(), err);
+                    } else {
+                        // TODO: we should raise to the runtime somehow
+                        println!("UNHANDLED PYGEN_ERROR {err:?}");
+                        err.display(py);
+                    }
                     // println!("PYGEN_ERR {:?}", Bound::from_owned_ptr(py, ret));
                     // panic!()
                 }

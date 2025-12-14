@@ -1,4 +1,6 @@
 import contextlib
+from types import TracebackType
+from typing import Any
 
 from ._tonio import (
     Barrier as _Barrier,
@@ -24,9 +26,14 @@ class Lock(_Lock):
 
     async def __aenter__(self):
         if event := self.acquire():
-            await event()
+            await event.waiter(None)
 
-    async def __aexit__(self):
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ):
         self.release()
 
 
@@ -38,14 +45,19 @@ class Semaphore(_Semaphore):
 
     async def __aenter__(self):
         if event := self.acquire():
-            await event()
+            await event.waiter(None)
 
-    async def __aexit__(self):
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ):
         self.release()
 
 
 class Barrier(_Barrier):
-    def wait(self):
+    def wait(self) -> Coro[int]:
         count = self.ack()
         yield self.event.waiter(None)
         return count
@@ -59,7 +71,7 @@ class ChannelSender(_ChannelSender):
 
 
 class ChannelReceiver(_ChannelReceiver):
-    def receive(self) -> Coro[None]:
+    def receive(self) -> Coro[Any]:
         msg, event = self._receive()
         while event:
             yield event.waiter(None)
@@ -68,7 +80,7 @@ class ChannelReceiver(_ChannelReceiver):
 
 
 class UnboundedChannelReceiver(_UnboundedChannelReceiver):
-    def receive(self) -> Coro[None]:
+    def receive(self) -> Coro[Any]:
         msg, event = self._receive()
         while event:
             yield event.waiter(None)
