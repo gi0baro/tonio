@@ -406,7 +406,7 @@ impl Suspension {
                     value,
                 };
                 Box::new(handle)
-            },
+            }
         }
     }
 

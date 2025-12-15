@@ -51,7 +51,7 @@ pub struct RuntimeCBHandlerState {
 
 #[pyclass(frozen, subclass, module = "tonio._tonio")]
 pub struct Runtime {
-    idle: atomic::AtomicBool,
+    // idle: atomic::AtomicBool,
     io: Mutex<Poll>,
     waker: Arc<Waker>,
     handles_io: papaya::HashMap<Token, IOHandle>,
@@ -105,11 +105,11 @@ impl Runtime {
         }
 
         let poll_result = {
-            self.idle.store(true, atomic::Ordering::Release);
+            // self.idle.store(true, atomic::Ordering::Release);
             py.detach(|| {
                 let mut io = self.io.lock().unwrap();
                 let res = io.poll(&mut state.events, sched_time.map(Duration::from_micros));
-                self.idle.store(false, atomic::Ordering::Release);
+                // self.idle.store(false, atomic::Ordering::Release);
                 if let Err(ref err) = res
                     && err.kind() == std::io::ErrorKind::Interrupted
                 {
@@ -250,10 +250,11 @@ impl Runtime {
 
     #[inline(always)]
     fn wake(&self) {
-        if self.idle.load(atomic::Ordering::Acquire) {
-            // println!("WAKE UP");
-            _ = self.waker.wake();
-        }
+        // if self.idle.load(atomic::Ordering::Acquire) {
+        //     // println!("WAKE UP");
+        //     _ = self.waker.wake();
+        // }
+        _ = self.waker.wake();
     }
 
     pub fn add_handle(&self, handle: BoxedHandle) {
@@ -284,7 +285,7 @@ impl Runtime {
         let (channel_sig_send, channel_sig_recv) = channel::bounded(threads);
 
         Ok(Self {
-            idle: atomic::AtomicBool::new(false),
+            // idle: atomic::AtomicBool::new(false),
             io: Mutex::new(poll),
             waker: Arc::new(waker),
             handles_io: papaya::HashMap::with_capacity(128),

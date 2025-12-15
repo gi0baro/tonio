@@ -198,18 +198,25 @@ class _Socket(_SocketWrapper):
                 break
 
     def recv(self, bufsize: int, flags: int = 0, /) -> Coro[bytes]:
+        try:
+            data = self._sock.recv(bufsize, flags)
+        except (BlockingIOError, InterruptedError):
+            data = None
+
+        if data is not None:
+            return data
+
         # print('RECV', self)
         runtime = get_runtime()
         fd = self.fileno()
         event = Event()
         runtime.reader_add(fd, event)
         # print('RECV added reader', self)
-        data = b''
 
         while True:
             yield event.waiter(None)
             try:
-                data += self._sock.recv(bufsize, flags)
+                data = self._sock.recv(bufsize, flags)
             except (BlockingIOError, InterruptedError):
                 # print('RECV BLOCK EVTCLEAR', self)
                 event.clear()
@@ -231,7 +238,7 @@ class _Socket(_SocketWrapper):
     # coro def recvmsg_into
 
     def send(self, data: Any, flags: int = 0, /) -> Coro[int]:
-        if not bytes:
+        if not data:
             return 0
 
         try:

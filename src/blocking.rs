@@ -58,14 +58,12 @@ impl BlockingTask {
 }
 
 pub(crate) struct BlockingRunnerPool {
-    birth: time::Instant,
     queue: channel::Sender<BlockingTask>,
     tq: channel::Receiver<BlockingTask>,
     threads: Arc<atomic::AtomicUsize>,
     tmax: usize,
     idle_timeout: time::Duration,
     spawning: atomic::AtomicBool,
-    spawn_tick: atomic::AtomicU64,
 }
 
 impl BlockingRunnerPool {
@@ -76,39 +74,32 @@ impl BlockingRunnerPool {
             tq: qrx.clone(),
             threads: Arc::new(1.into()),
             tmax: max_threads,
-            birth: time::Instant::now(),
             spawning: false.into(),
-            spawn_tick: 0.into(),
             idle_timeout: time::Duration::from_secs(idle_timeout),
         }
     }
 
     #[inline(always)]
     fn spawn_thread(&self) {
-        let tick = self.birth.elapsed().as_micros() as u64;
-        if tick - self.spawn_tick.load(atomic::Ordering::Relaxed) < 350 {
-            return;
-        }
         if self
             .spawning
-            .compare_exchange(false, true, atomic::Ordering::Relaxed, atomic::Ordering::Relaxed)
+            .compare_exchange(false, true, atomic::Ordering::Release, atomic::Ordering::Relaxed)
             .is_err()
         {
             return;
         }
 
+        self.threads.fetch_add(1, atomic::Ordering::Release);
+
         let queue = self.tq.clone();
         let tcount = self.threads.clone();
         let timeout = self.idle_timeout;
         thread::spawn(move || {
-            tcount.fetch_add(1, atomic::Ordering::Release);
             blocking_worker(queue, timeout);
             tcount.fetch_sub(1, atomic::Ordering::Release);
         });
 
-        self.spawn_tick
-            .store(self.birth.elapsed().as_micros() as u64, atomic::Ordering::Relaxed);
-        self.spawning.store(false, atomic::Ordering::Relaxed);
+        self.spawning.store(false, atomic::Ordering::Release);
     }
 
     #[inline]

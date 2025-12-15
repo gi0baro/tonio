@@ -97,16 +97,23 @@ class _Socket(_socket._Socket):
                 break
 
     async def recv(self, bufsize: int, flags: int = 0, /) -> bytes:
+        try:
+            data = self._sock.recv(bufsize, flags)
+        except (BlockingIOError, InterruptedError):
+            data = None
+
+        if data is not None:
+            return data
+
         runtime = get_runtime()
         fd = self.fileno()
         event = Event()
         runtime.reader_add(fd, event)
-        data = b''
 
         while True:
             await event.waiter(None)
             try:
-                data += self._sock.recv(bufsize, flags)
+                data = self._sock.recv(bufsize, flags)
             except (BlockingIOError, InterruptedError):
                 event.clear()
                 continue
@@ -120,7 +127,7 @@ class _Socket(_socket._Socket):
         return data
 
     async def send(self, data: Any, flags: int = 0, /) -> int:
-        if not bytes:
+        if not data:
             return 0
 
         try:
