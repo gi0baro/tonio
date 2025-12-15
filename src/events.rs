@@ -240,11 +240,12 @@ impl Waiter {
     }
 
     fn send(&self, value: Py<PyAny>) -> PyResult<Py<PyAny>> {
-        // println!("Waiter SEND {value:?}");
         Err(pyo3::exceptions::PyStopIteration::new_err(value))
     }
 
-    // TODO: throw?
+    fn throw(&self, value: Bound<PyAny>) -> PyResult<()> {
+        Err(PyErr::from_value(value))
+    }
 }
 
 #[pyclass(frozen, module = "tonio._tonio")]
@@ -368,7 +369,7 @@ impl Suspension {
     fn to_handle(&self, py: Python, value: Py<PyAny>) -> BoxedHandle {
         match &self.target {
             SuspensionTarget::PyGen(target) => {
-                // println!("suspension resume {:?}", target.bind(py));
+                // println!("suspension resume {:?} {:?}", target.bind(py), value.bind(py));
                 let handle = PyGenHandle {
                     parent: self.parent.clone(),
                     coro: target.clone_ref(py),
@@ -377,6 +378,7 @@ impl Suspension {
                 Box::new(handle)
             }
             SuspensionTarget::PyAsyncGen(target) => {
+                // println!("suspension resume {:?} {:?}", target.bind(py), value.bind(py));
                 let handle = PyAsyncGenHandle {
                     parent: self.parent.clone(),
                     coro: target.clone_ref(py),

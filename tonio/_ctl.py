@@ -12,11 +12,17 @@ _Return = TypeVar('_Return')
 def spawn(*coros: Coro):
     events = []
     res = ResultHolder(len(coros))
+    err = None
 
     def wrapper(idx, coro, event):
-        ret = yield coro
-        res.store(ret, idx)
-        event.set()
+        nonlocal err
+        try:
+            ret = yield coro
+            res.store(ret, idx)
+        except Exception as exc:
+            err = exc
+        finally:
+            event.set()
 
     for idx, coro in enumerate(coros):
         event = Event()
@@ -27,6 +33,8 @@ def spawn(*coros: Coro):
 
     def join():
         yield waiter
+        if err is not None:
+            raise err
         return res.fetch()
 
     return join()

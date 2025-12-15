@@ -24,11 +24,18 @@ class Runtime(_Runtime):
     def run_pygen_until_complete(self, coro):
         done = Event()
         res = ResultHolder()
+        is_exc = False
 
         def wrapper():
-            ret = yield coro
-            res.store(ret)
-            done.set()
+            nonlocal is_exc
+            try:
+                ret = yield coro
+                res.store(ret)
+            except Exception as exc:
+                is_exc = True
+                res.store(exc)
+            finally:
+                done.set()
 
         def watcher():
             yield from done.wait()
@@ -38,16 +45,26 @@ class Runtime(_Runtime):
         self._spawn_pygen(wrapper())
         self.run_forever()
 
-        return res.fetch()
+        ret = res.fetch()
+        if is_exc:
+            raise ret
+        return ret
 
     def run_pyasyncgen_until_complete(self, coro):
         done = Event()
         res = ResultHolder()
+        is_exc = False
 
         async def wrapper():
-            ret = await coro
-            res.store(ret)
-            done.set()
+            nonlocal is_exc
+            try:
+                ret = await coro
+                res.store(ret)
+            except Exception as exc:
+                is_exc = True
+                res.store(exc)
+            finally:
+                done.set()
 
         async def watcher():
             await done()
@@ -57,7 +74,10 @@ class Runtime(_Runtime):
         self._spawn_pyasyncgen(wrapper())
         self.run_forever()
 
-        return res.fetch()
+        ret = res.fetch()
+        if is_exc:
+            raise ret
+        return ret
 
     def stop(self):
         self._stopping = True
