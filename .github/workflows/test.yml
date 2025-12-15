@@ -12,6 +12,7 @@ on:
 jobs:
   linux:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     strategy:
       fail-fast: false
       matrix:
@@ -38,6 +39,7 @@ jobs:
 
   macos:
     runs-on: macos-latest
+    timeout-minutes: 5
     strategy:
       fail-fast: false
       matrix:
