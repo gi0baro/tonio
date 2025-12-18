@@ -12,33 +12,31 @@ from .._tonio import (
 class Barrier(_Barrier):
     async def wait(self) -> int:
         count = self.ack()
-        await self.event.waiter(None)
+        await self._event.waiter(None)
         return count
 
 
 class ChannelSender(_ChannelSender):
     async def send(self, message) -> None:
-        if event := self._send_or_wait(message):
-            await event.waiter(None)
-            self._send(message)
+        await self._send(message).waiter(None)
 
 
 class ChannelReceiver(_ChannelReceiver):
     async def receive(self):
-        msg, event = self._receive()
-        while event:
+        while True:
+            event, blocking, message = self._receive()
+            if not blocking:
+                return message
             await event.waiter(None)
-            msg, event = self._receive()
-        return msg
 
 
 class UnboundedChannelReceiver(_UnboundedChannelReceiver):
     async def receive(self):
-        msg, event = self._receive()
-        while event:
+        while True:
+            event, blocking, message = self._receive()
+            if not blocking:
+                return message
             await event.waiter(None)
-            msg, event = self._receive()
-        return msg
 
 
 def channel(size) -> tuple[ChannelSender, ChannelReceiver]:

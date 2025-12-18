@@ -92,12 +92,9 @@ impl PyGenHandle {
                         // println!("WAKE FROM PYGEN_ERROR {:?}", self.coro.bind(py));
                         suspension.error(py, runtime.get(), err);
                     } else {
-                        // TODO: we should raise to the runtime somehow
                         println!("UNHANDLED PYGEN_ERROR {err:?}");
                         err.display(py);
                     }
-                    // println!("PYGEN_ERR {:?}", Bound::from_owned_ptr(py, ret));
-                    // panic!()
                 }
             }
         }
@@ -121,7 +118,7 @@ impl Handle for PyGenThrower {
         let throw_method = pyo3::intern!(py, "throw");
 
         unsafe {
-            println!("GOING TO THROW {:?} {}", self.coro.bind(py), self.parent.is_some());
+            // println!("GOING TO THROW {:?} {}", self.coro.bind(py), self.parent.is_some());
             let ret =
                 pyo3::ffi::PyObject_CallMethodOneArg(self.coro.as_ptr(), throw_method.as_ptr(), self.value.as_ptr());
             let res = Bound::from_owned_ptr_or_err(py, ret);
@@ -136,7 +133,9 @@ impl Handle for PyGenThrower {
                 }
                 return;
             }
-            if let Err(err) = res {
+            if let Err(err) = res
+                && !err.is_instance_of::<pyo3::exceptions::PyStopIteration>(py)
+            {
                 println!("UNHANDLED THROW {:?}", self.coro.bind(py));
                 err.print(py);
             }

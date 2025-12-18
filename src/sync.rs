@@ -64,6 +64,7 @@ impl Semaphore {
         let mut state = self.state.lock().unwrap();
         #[allow(clippy::cast_possible_wrap)]
         let value = state.0 as i32 - state.1.len() as i32;
+        // println!("ACQ VAL {:?}", value);
         if value <= 0 {
             let event = Py::new(py, Event::new()).unwrap();
             state.1.push_back(event.clone_ref(py));
@@ -88,7 +89,7 @@ struct Barrier {
     value: usize,
     count: atomic::AtomicUsize,
     #[pyo3(get)]
-    event: Py<Event>,
+    _event: Py<Event>,
 }
 
 #[pymethods]
@@ -98,14 +99,14 @@ impl Barrier {
         Self {
             value,
             count: 0.into(),
-            event: Py::new(py, Event::new()).unwrap(),
+            _event: Py::new(py, Event::new()).unwrap(),
         }
     }
 
     fn ack(&self, py: Python) -> usize {
         let count = self.count.fetch_add(1, atomic::Ordering::Release);
         if (count + 1) >= self.value {
-            self.event.get().set(py);
+            self._event.get().set(py);
         }
         count
     }
@@ -183,78 +184,189 @@ impl SemaphoreCtx {
 
 struct Channel {
     size: usize,
-    buf: atomic::AtomicUsize,
+    len: atomic::AtomicUsize,
+    tx_queue: Mutex<VecDeque<(Py<PyAny>, Py<Event>)>>,
+    rx_queue: Mutex<VecDeque<Py<Event>>>,
+    tx: (atomic::AtomicUsize, papaya::HashSet<usize>),
+    rx: (atomic::AtomicUsize, papaya::HashSet<usize>),
     closed: atomic::AtomicBool,
-    stream: Mutex<VecDeque<Py<PyAny>>>,
-    consumers: Mutex<VecDeque<Py<Event>>>,
-    senders: Mutex<VecDeque<Py<Event>>>,
-}
-
-enum ChannelRecvResult {
-    Message(Py<PyAny>),
-    Waiter(Py<Event>),
-    Empty,
 }
 
 impl Channel {
-    fn send_or_hold(&self, py: Python, message: Py<PyAny>) -> Option<Py<Event>> {
-        if self.buf.fetch_add(1, atomic::Ordering::Release) >= self.size {
-            // println!("CHANNEL OVERFLOW");
-            let event = Py::new(py, Event::new()).unwrap();
-            let mut waiters = self.senders.lock().unwrap();
-            waiters.push_back(event.clone_ref(py));
-            return Some(event);
-        }
-        self.send(py, message);
-        None
+    fn tx_add(&self) -> usize {
+        let idx = self.tx.0.fetch_add(1, atomic::Ordering::Release);
+        let tx = self.tx.1.pin();
+        tx.insert(idx);
+        idx
     }
 
-    fn send(&self, py: Python, message: Py<PyAny>) {
+    fn rx_add(&self) -> usize {
+        let idx = self.rx.0.fetch_add(1, atomic::Ordering::Release);
+        let rx = self.rx.1.pin();
+        rx.insert(idx);
+        idx
+    }
+
+    fn tx_rem(&self, idx: usize) {
+        let tx = self.tx.1.pin();
+        tx.remove(&idx);
+        if tx.is_empty() {
+            self.close();
+        }
+    }
+
+    fn rx_rem(&self, idx: usize) {
+        let rx = self.rx.1.pin();
+        rx.remove(&idx);
+        if rx.is_empty() {
+            self.close();
+        }
+    }
+
+    fn close(&self) {
+        if self
+            .closed
+            .compare_exchange(false, true, atomic::Ordering::Release, atomic::Ordering::Relaxed)
+            .is_ok()
         {
-            let mut stream = self.stream.lock().unwrap();
-            stream.push_back(message);
-            // println!("CHANNEL SEND LEN {}", stream.len());
-        }
-        if let Some(event) = {
-            let mut consumers = self.consumers.lock().unwrap();
-            // println!("CHANNEL CONSUMERS {:?}", consumers.len());
-            consumers.pop_front()
-        } {
-            // println!("CHANNEL CONSUMER WAKE");
-            event.get().set(py);
+            Python::attach(|py| {
+                let mut rx = self.rx_queue.lock().unwrap();
+                while let Some(event) = rx.pop_front() {
+                    event.get().set(py);
+                }
+            });
         }
     }
 
-    fn receive(&self, py: Python) -> ChannelRecvResult {
-        if let Some(message) = {
-            let mut stream = self.stream.lock().unwrap();
-            // println!("CHANNEL RECV LEN {}", stream.len());
-            stream.pop_front()
+    fn push(&self, py: Python, message: Py<PyAny>) -> Py<Event> {
+        let want_pull = Py::new(py, Event::new()).unwrap();
+        let len = self.len.fetch_add(1, atomic::Ordering::SeqCst);
+        if len < self.size {
+            want_pull.get().set(py);
+        }
+        {
+            let mut tx = self.tx_queue.lock().unwrap();
+            tx.push_back((message, want_pull.clone_ref(py)));
+        }
+        if let Some(want_push) = {
+            let mut rx = self.rx_queue.lock().unwrap();
+            rx.pop_front()
         } {
-            self.buf.fetch_sub(1, atomic::Ordering::Release);
-            if let Some(event) = {
-                let mut senders = self.senders.lock().unwrap();
-                // println!("CHANNEL SENDERS {}", senders.len());
-                senders.pop_front()
-            } {
-                // println!("CHANNEL SENDER WAKE");
-                event.get().set(py);
+            want_push.get().set(py);
+        }
+        want_pull
+    }
+
+    fn pull(&self, py: Python) -> (Py<Event>, Option<Py<PyAny>>) {
+        let want_push = Py::new(py, Event::new()).unwrap();
+        if let Some((message, want_pull)) = {
+            match self.tx_queue.try_lock() {
+                Ok(mut tx) => tx.pop_front(),
+                _ => None,
             }
-            return ChannelRecvResult::Message(message);
+        } {
+            self.len.fetch_sub(1, atomic::Ordering::SeqCst);
+            want_push.get().set(py);
+            want_pull.get().set(py);
+            return (want_push, Some(message));
         }
-        if self.closed.load(atomic::Ordering::Acquire) {
-            return ChannelRecvResult::Empty;
+        if self.closed.load(atomic::Ordering::SeqCst) {
+            want_push.get().set(py);
+        } else {
+            let mut rx = self.rx_queue.lock().unwrap();
+            rx.push_back(want_push.clone_ref(py));
         }
-        let event = Py::new(py, Event::new()).unwrap();
-        let mut registry = self.consumers.lock().unwrap();
-        registry.push_back(event.clone_ref(py));
-        ChannelRecvResult::Waiter(event)
+        (want_push, None)
     }
 }
 
 struct UnboundedChannel {
-    stream: Mutex<VecDeque<Py<PyAny>>>,
-    consumers: Mutex<VecDeque<Py<Event>>>,
+    tx_queue: Mutex<VecDeque<Py<PyAny>>>,
+    rx_queue: Mutex<VecDeque<Py<Event>>>,
+    tx: (atomic::AtomicUsize, papaya::HashSet<usize>),
+    rx: (atomic::AtomicUsize, papaya::HashSet<usize>),
+    closed: atomic::AtomicBool,
+}
+
+impl UnboundedChannel {
+    fn tx_add(&self) -> usize {
+        let idx = self.tx.0.fetch_add(1, atomic::Ordering::Release);
+        let tx = self.tx.1.pin();
+        tx.insert(idx);
+        idx
+    }
+
+    fn rx_add(&self) -> usize {
+        let idx = self.rx.0.fetch_add(1, atomic::Ordering::Release);
+        let rx = self.rx.1.pin();
+        rx.insert(idx);
+        idx
+    }
+
+    fn tx_rem(&self, idx: usize) {
+        let tx = self.tx.1.pin();
+        tx.remove(&idx);
+        if tx.is_empty() {
+            self.close(None);
+        }
+    }
+
+    fn rx_rem(&self, idx: usize) {
+        let rx = self.rx.1.pin();
+        rx.remove(&idx);
+        if rx.is_empty() {
+            self.close(None);
+        }
+    }
+
+    fn push(&self, py: Python, message: Py<PyAny>) {
+        {
+            let mut tx = self.tx_queue.lock().unwrap();
+            tx.push_back(message);
+        }
+        if let Some(event) = {
+            let mut rx = self.rx_queue.lock().unwrap();
+            rx.pop_front()
+        } {
+            event.get().set(py);
+        }
+    }
+
+    fn pull(&self, py: Python) -> (Py<Event>, Option<Py<PyAny>>, bool) {
+        let mut closed = false;
+        let want_push = Py::new(py, Event::new()).unwrap();
+        //: lock `rx_queue` so we have only 1 receiver at time in the following section
+        let mut rx = self.rx_queue.lock().unwrap();
+        if let Some(message) = match self.tx_queue.try_lock() {
+            //: if the `tx_queue` lock acq fails, senders are writing
+            Ok(mut data) => data.pop_front(),
+            _ => None,
+        } {
+            return (want_push, Some(message), closed);
+        }
+        if self.closed.load(atomic::Ordering::SeqCst) {
+            want_push.get().set(py);
+            closed = true;
+        } else {
+            rx.push_back(want_push.clone_ref(py));
+        }
+        (want_push, None, closed)
+    }
+
+    fn close(&self, py: Option<Python>) {
+        // TODO: change to always acquire python interpreter instead of arg?
+        if self
+            .closed
+            .compare_exchange(false, true, atomic::Ordering::Release, atomic::Ordering::Relaxed)
+            .is_ok()
+            && let Some(py) = py
+        {
+            let mut rx = self.rx_queue.lock().unwrap();
+            while let Some(event) = rx.pop_front() {
+                event.get().set(py);
+            }
+        }
+    }
 }
 
 #[pyclass(frozen, module = "tonio._tonio", name = "Channel")]
@@ -269,11 +381,12 @@ impl PyChannel {
         Self {
             inner: Arc::new(Channel {
                 size,
-                buf: 0.into(),
+                len: 0.into(),
+                tx_queue: Mutex::new(VecDeque::new()),
+                rx_queue: Mutex::new(VecDeque::new()),
+                tx: (0.into(), papaya::HashSet::new()),
+                rx: (0.into(), papaya::HashSet::new()),
                 closed: false.into(),
-                stream: Mutex::new(VecDeque::new()),
-                consumers: Mutex::new(VecDeque::new()),
-                senders: Mutex::new(VecDeque::new()),
             }),
         }
     }
@@ -290,8 +403,11 @@ impl PyUnboundedChannel {
     fn new() -> Self {
         Self {
             inner: Arc::new(UnboundedChannel {
-                stream: Mutex::new(VecDeque::new()),
-                consumers: Mutex::new(VecDeque::new()),
+                tx_queue: Mutex::new(VecDeque::new()),
+                rx_queue: Mutex::new(VecDeque::new()),
+                tx: (0.into(), papaya::HashSet::new()),
+                rx: (0.into(), papaya::HashSet::new()),
+                closed: false.into(),
             }),
         }
     }
@@ -300,112 +416,147 @@ impl PyUnboundedChannel {
 #[pyclass(frozen, subclass, module = "tonio._tonio")]
 struct ChannelSender {
     channel: Arc<Channel>,
+    id: usize,
 }
 
 #[pymethods]
 impl ChannelSender {
     #[new]
     fn new(channel: Py<PyChannel>) -> Self {
+        let inner = &channel.get().inner;
+        let id = inner.tx_add();
         Self {
-            channel: channel.get().inner.clone(),
+            channel: inner.clone(),
+            id,
         }
     }
 
-    fn close(&self, py: Python) {
-        // println!("CLOSE BEGIN");
-        self.channel.closed.store(true, atomic::Ordering::Release);
-        // println!("CLOSE BOOL");
-        let mut consumers = self.channel.consumers.lock().unwrap();
-        // println!("CLOSE CONS {}", consumers.len());
-        while let Some(event) = consumers.pop_front() {
-            event.get().set(py);
+    // TODO: clone
+
+    fn close(&self) {
+        self.channel.close();
+    }
+
+    fn _send(&self, py: Python, message: Py<PyAny>) -> PyResult<Py<Event>> {
+        if self.channel.closed.load(atomic::Ordering::SeqCst) {
+            return Err(pyo3::exceptions::PyBrokenPipeError::new_err("channel closed"));
         }
-        // println!("CLOSE DONE");
+        Ok(self.channel.push(py, message))
     }
+}
 
-    fn _send_or_wait(&self, py: Python, message: Py<PyAny>) -> Option<Py<Event>> {
-        self.channel.send_or_hold(py, message)
-    }
-
-    fn _send(&self, py: Python, message: Py<PyAny>) {
-        self.channel.send(py, message);
+impl Drop for ChannelSender {
+    fn drop(&mut self) {
+        self.channel.tx_rem(self.id);
     }
 }
 
 #[pyclass(frozen, subclass, module = "tonio._tonio")]
 struct ChannelReceiver {
     channel: Arc<Channel>,
+    id: usize,
 }
 
 #[pymethods]
 impl ChannelReceiver {
     #[new]
     fn new(channel: Py<PyChannel>) -> Self {
+        let inner = &channel.get().inner;
+        let id = inner.rx_add();
         Self {
             channel: channel.get().inner.clone(),
+            id,
         }
     }
 
-    fn _receive(&self, py: Python) -> PyResult<(Option<Py<PyAny>>, Option<Py<Event>>)> {
-        match self.channel.receive(py) {
-            ChannelRecvResult::Message(message) => Ok((Some(message), None)),
-            ChannelRecvResult::Waiter(event) => Ok((None, Some(event))),
-            ChannelRecvResult::Empty => Err(pyo3::exceptions::PyBrokenPipeError::new_err("channel closed")),
+    // TODO: clone
+
+    fn _receive(&self, py: Python) -> PyResult<(Py<Event>, bool, Option<Py<PyAny>>)> {
+        if self.channel.closed.load(atomic::Ordering::SeqCst) {
+            return Err(pyo3::exceptions::PyBrokenPipeError::new_err("channel closed"));
         }
+        let (event, message) = self.channel.pull(py);
+        Ok((event, message.is_none(), message))
+    }
+}
+
+impl Drop for ChannelReceiver {
+    fn drop(&mut self) {
+        self.channel.rx_rem(self.id);
     }
 }
 
 #[pyclass(frozen, subclass, module = "tonio._tonio")]
 struct UnboundedChannelSender {
     channel: Arc<UnboundedChannel>,
+    id: usize,
 }
 
 #[pymethods]
 impl UnboundedChannelSender {
     #[new]
     fn new(channel: Py<PyUnboundedChannel>) -> Self {
+        let inner = &channel.get().inner;
+        let id = inner.tx_add();
         Self {
-            channel: channel.get().inner.clone(),
+            channel: inner.clone(),
+            id,
         }
     }
 
-    fn send(&self, py: Python, message: Py<PyAny>) {
-        {
-            let mut stream = self.channel.stream.lock().unwrap();
-            stream.push_back(message);
+    // TODO: clone
+
+    fn send(&self, py: Python, message: Py<PyAny>) -> PyResult<()> {
+        if self.channel.closed.load(atomic::Ordering::SeqCst) {
+            return Err(pyo3::exceptions::PyBrokenPipeError::new_err("Channel closed"));
         }
-        let mut consumers = self.channel.consumers.lock().unwrap();
-        if let Some(event) = consumers.pop_front() {
-            event.get().set(py);
-        }
+        self.channel.push(py, message);
+        Ok(())
+    }
+
+    fn close(&self, py: Python) {
+        self.channel.close(Some(py));
+    }
+}
+
+impl Drop for UnboundedChannelSender {
+    fn drop(&mut self) {
+        self.channel.tx_rem(self.id);
     }
 }
 
 #[pyclass(frozen, subclass, module = "tonio._tonio")]
 struct UnboundedChannelReceiver {
     channel: Arc<UnboundedChannel>,
+    id: usize,
 }
 
 #[pymethods]
 impl UnboundedChannelReceiver {
     #[new]
     fn new(channel: Py<PyUnboundedChannel>) -> Self {
+        let inner = &channel.get().inner;
+        let id = inner.rx_add();
         Self {
-            channel: channel.get().inner.clone(),
+            channel: inner.clone(),
+            id,
         }
     }
 
-    fn _receive(&self, py: Python) -> (Option<Py<PyAny>>, Option<Py<Event>>) {
-        if let Some(message) = {
-            let mut stream = self.channel.stream.lock().unwrap();
-            stream.pop_front()
-        } {
-            return (Some(message), None);
+    // TODO: clone
+
+    fn _receive(&self, py: Python) -> PyResult<(Py<Event>, bool, Option<Py<PyAny>>)> {
+        let (event, message, closed) = self.channel.pull(py);
+        if closed {
+            return Err(pyo3::exceptions::PyBrokenPipeError::new_err("channel closed"));
         }
-        let event = Py::new(py, Event::new()).unwrap();
-        let mut registry = self.channel.consumers.lock().unwrap();
-        registry.push_back(event.clone_ref(py));
-        (None, Some(event))
+        Ok((event, message.is_none(), message))
+    }
+}
+
+impl Drop for UnboundedChannelReceiver {
+    fn drop(&mut self) {
+        self.channel.rx_rem(self.id);
     }
 }
 

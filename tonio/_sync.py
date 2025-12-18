@@ -59,33 +59,31 @@ class Semaphore(_Semaphore):
 class Barrier(_Barrier):
     def wait(self) -> Coro[int]:
         count = self.ack()
-        yield self.event.waiter(None)
+        yield self._event.waiter(None)
         return count
 
 
 class ChannelSender(_ChannelSender):
     def send(self, message) -> Coro[None]:
-        if event := self._send_or_wait(message):
-            yield event.waiter(None)
-            self._send(message)
+        yield self._send(message).waiter(None)
 
 
 class ChannelReceiver(_ChannelReceiver):
     def receive(self) -> Coro[Any]:
-        msg, event = self._receive()
-        while event:
+        while True:
+            event, blocking, message = self._receive()
+            if not blocking:
+                return message
             yield event.waiter(None)
-            msg, event = self._receive()
-        return msg
 
 
 class UnboundedChannelReceiver(_UnboundedChannelReceiver):
     def receive(self) -> Coro[Any]:
-        msg, event = self._receive()
-        while event:
+        while True:
+            event, blocking, message = self._receive()
+            if not blocking:
+                return message
             yield event.waiter(None)
-            msg, event = self._receive()
-        return msg
 
 
 def channel(size) -> tuple[ChannelSender, ChannelReceiver]:

@@ -66,7 +66,7 @@ impl Event {
         }
     }
 
-    fn clear(&self) {
+    pub(crate) fn clear(&self) {
         if self
             .flag
             .compare_exchange(true, false, atomic::Ordering::Release, atomic::Ordering::Relaxed)
