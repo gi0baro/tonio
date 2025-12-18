@@ -12,15 +12,14 @@ _Return = TypeVar('_Return')
 def spawn(*coros: Coro):
     events = []
     res = ResultHolder(len(coros))
-    err = None
+    errs = []
 
     def wrapper(idx, coro, event):
-        nonlocal err
         try:
             ret = yield coro
             res.store(ret, idx)
         except Exception as exc:
-            err = exc
+            errs.append(exc)
         finally:
             event.set()
 
@@ -33,8 +32,8 @@ def spawn(*coros: Coro):
 
     def join():
         yield waiter
-        if err is not None:
-            raise err
+        if errs:
+            raise ExceptionGroup('SpawnExceptionGroup', errs)
         return res.fetch()
 
     return join()

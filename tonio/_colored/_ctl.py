@@ -11,15 +11,14 @@ _Return = TypeVar('_Return')
 def spawn(*coros) -> Awaitable[Any]:
     events = []
     res = ResultHolder(len(coros))
-    err = None
+    errs = []
 
     async def wrapper(idx, coro, event):
-        nonlocal err
         try:
             ret = await coro
             res.store(ret, idx)
         except Exception as exc:
-            err = exc
+            errs.append(exc)
         finally:
             event.set()
 
@@ -32,8 +31,8 @@ def spawn(*coros) -> Awaitable[Any]:
 
     async def join():
         await waiter
-        if err is not None:
-            raise err
+        if errs:
+            raise ExceptionGroup('SpawnExceptionGroup', errs)
         return res.fetch()
 
     return join()
