@@ -262,7 +262,7 @@ checksum = "df7f62577c25e07834649fc3b39fafdc597c0a3527dc1c60129201ccfcbaa50c"
 
 [[package]]
 name = "tonio"
-version = "0.1.0-alpha2"
+version = "0.1.0-alpha3"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
