@@ -6,7 +6,7 @@ from types import TracebackType
 from typing import Any
 
 from .._ctl import spawn_blocking
-from .._tonio import Event, Socket as _SocketWrapper, get_runtime
+from .._tonio import Socket as _SocketWrapper, get_runtime
 from .._types import Coro
 
 
@@ -139,28 +139,22 @@ class _Socket(_SocketWrapper):
         return addr
 
     def accept(self):
-        # print('SOCK ACCEPT')
         runtime = get_runtime()
         fd = self.fileno()
-        event = Event()
-        runtime.reader_add(fd, event)
-        # print('SOCK ACCEPT added reader', self)
+        event = runtime._reader_add(fd, False)
 
         while True:
             yield event.waiter(None)
             try:
                 conn, address = self._sock.accept()
             except (BlockingIOError, InterruptedError):
-                event.clear()
+                event = runtime._reader_add(fd, False)
                 continue
             except BaseException as exc:
-                runtime.reader_rem(fd)
                 raise exc
             else:
-                runtime.reader_rem(fd)
                 break
 
-        # print('SOCK ACCEPT DONE', conn, address)
         return from_stdlib_socket(conn), address
 
     def connect(self, address: Any) -> Coro[None]:
@@ -177,9 +171,7 @@ class _Socket(_SocketWrapper):
 
         runtime = get_runtime()
         fd = self.fileno()
-        event = Event()
-        runtime.writer_add(fd, event)
-        # print('SOCK CONNECT added writer', self)
+        event = runtime._writer_add(fd, False)
 
         while True:
             yield event.waiter(None)
@@ -188,13 +180,11 @@ class _Socket(_SocketWrapper):
                 if err != 0:
                     raise OSError(err, 'Connect call failed %s' % (address,))
             except (BlockingIOError, InterruptedError):
-                event.clear()
+                event = runtime._writer_add(fd, False)
                 continue
             except BaseException as exc:
-                runtime.writer_rem(fd)
                 raise exc
             else:
-                runtime.writer_rem(fd)
                 break
 
     def recv(self, bufsize: int, flags: int = 0, /) -> Coro[bytes]:
@@ -206,29 +196,22 @@ class _Socket(_SocketWrapper):
         if data is not None:
             return data
 
-        # print('RECV', self)
         runtime = get_runtime()
         fd = self.fileno()
-        event = Event()
-        runtime.reader_add(fd, event)
-        # print('RECV added reader', self)
+        event = runtime._reader_add(fd, False)
 
         while True:
             yield event.waiter(None)
             try:
                 data = self._sock.recv(bufsize, flags)
             except (BlockingIOError, InterruptedError):
-                # print('RECV BLOCK EVTCLEAR', self)
-                event.clear()
+                event = runtime._reader_add(fd, False)
                 continue
             except BaseException as exc:
-                runtime.reader_rem(fd)
                 raise exc
             else:
-                runtime.reader_rem(fd)
                 break
 
-        # print('RECV DONE', self)
         return data
 
     # coro def recv_into
@@ -251,24 +234,24 @@ class _Socket(_SocketWrapper):
 
         runtime = get_runtime()
         fd = self.fileno()
-        event = Event()
-        runtime.writer_add(fd, event)
+        event = runtime._writer_add(fd, True)
         sent = n
 
         while True:
             yield event.waiter(None)
+            event.clear()
+
             try:
                 n = self._sock.send(data[sent:], flags)
             except (BlockingIOError, InterruptedError):
-                event.clear()
                 continue
             except BaseException as exc:
-                runtime.writer_rem(fd)
+                runtime._writer_rem(fd)
                 raise exc
 
             sent += n
             if sent == len(data):
-                runtime.writer_rem(fd)
+                runtime._writer_rem(fd)
                 break
 
         return sent
