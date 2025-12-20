@@ -317,7 +317,7 @@ def yield_lock():
     with (yield lock()):
         # do something
 
-def async_lock():
+async def async_lock():
     async with lock:
         # do something
 ```
