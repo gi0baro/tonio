@@ -2,7 +2,7 @@ import contextlib
 from typing import TypeVar
 
 from ._events import Event
-from ._tonio import ResultHolder, TimeoutError, get_runtime
+from ._tonio import CancelledError, ResultHolder, get_runtime
 from ._types import Coro
 
 
@@ -30,7 +30,7 @@ def timeout(coro: Coro[_T], timeout: int | float) -> Coro[tuple[None | _T, bool]
 
     yield from done.wait(timeout)
     if not done.is_set():
-        with contextlib.suppress(TimeoutError):
-            coro.throw(TimeoutError)
+        with contextlib.suppress(CancelledError):
+            coro.throw(CancelledError)
         return None, False
     return res.fetch(), True

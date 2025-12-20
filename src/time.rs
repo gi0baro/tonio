@@ -1,13 +1,25 @@
 use pyo3::prelude::*;
 use std::cmp::Ordering;
+use std::sync::{Arc, atomic};
 
-use crate::events::SuspensionData;
+use crate::events::Suspension;
 use crate::handles::Handle;
 
 pub struct Timer {
     pub(crate) when: u128,
-    pub(crate) target: SuspensionData,
+    pub(crate) target: Arc<Suspension>,
+    pub(crate) cancelled: Arc<atomic::AtomicBool>,
 }
+
+// impl Timer {
+//     fn new(target: SuspensionData, when: u128) -> Self {
+//         Self {
+//             when,
+//             target,
+//             cancelled: Arc::new(false.into()),
+//         }
+//     }
+// }
 
 impl PartialEq for Timer {
     fn eq(&self, _other: &Self) -> bool {
@@ -42,6 +54,9 @@ impl Handle for Timer {
         runtime: Py<crate::runtime::Runtime>,
         _state: &mut crate::runtime::RuntimeCBHandlerState,
     ) {
-        self.target.0.resume(py, runtime.get(), py.None(), self.target.1);
+        if self.cancelled.load(atomic::Ordering::Acquire) {
+            return;
+        }
+        self.target.resume(py, runtime.get(), py.None(), 0);
     }
 }

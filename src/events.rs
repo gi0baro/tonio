@@ -95,6 +95,7 @@ impl Handle for Py<Event> {
 #[pyclass(frozen, module = "tonio._tonio")]
 pub(crate) struct Waiter {
     registered: atomic::AtomicBool,
+    cancelled: Arc<atomic::AtomicBool>,
     events: Vec<Py<Event>>,
     timeout: Option<usize>,
 }
@@ -103,6 +104,7 @@ impl Waiter {
     fn from_event(py: Python, event: Py<Event>, timeout: Option<usize>) -> Py<Self> {
         let slf = Self {
             registered: false.into(),
+            cancelled: Arc::new(false.into()),
             events: vec![event],
             timeout,
         };
@@ -123,16 +125,16 @@ impl Waiter {
                 target: suspension.clone(),
                 idx,
             };
-            if let Some(timeout) = self.timeout {
-                // create timer
-                let when = runtime.get()._get_clock() + (timeout as u128);
-                let timer = Timer {
-                    when,
-                    target: (suspension.clone(), idx),
-                };
-                runtime.get().add_timer(timer);
-            }
             event.get().add_waker(py, waker);
+        }
+        if let Some(timeout) = self.timeout {
+            let when = runtime.get()._get_clock() + (timeout as u128);
+            let timer = Timer {
+                when,
+                target: suspension.clone(),
+                cancelled: self.cancelled.clone(),
+            };
+            runtime.get().add_timer(timer);
         }
     }
 
@@ -167,6 +169,7 @@ impl Waiter {
     fn new(events: Vec<Py<Event>>) -> Self {
         Self {
             registered: false.into(),
+            cancelled: Arc::new(false.into()),
             events,
             timeout: None,
         }
@@ -189,7 +192,12 @@ impl Waiter {
     }
 
     fn throw(&self, value: Bound<PyAny>) -> PyResult<()> {
-        Err(PyErr::from_value(value))
+        let py = value.py();
+        let err = PyErr::from_value(value);
+        if err.is_instance_of::<crate::errors::CancelledError>(py) {
+            self.cancelled.store(true, atomic::Ordering::Release);
+        }
+        Err(err)
     }
 }
 

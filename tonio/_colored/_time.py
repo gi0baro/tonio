@@ -2,7 +2,7 @@ import contextlib
 from typing import Awaitable, TypeVar
 
 from .._events import Event
-from .._tonio import ResultHolder, TimeoutError, get_runtime
+from .._tonio import CancelledError, ResultHolder, get_runtime
 
 
 _T = TypeVar('_T')
@@ -25,7 +25,7 @@ async def timeout(coro: Awaitable[_T], timeout: int | float) -> tuple[None | _T,
 
     await done(timeout)
     if not done.is_set():
-        with contextlib.suppress(TimeoutError):
-            coro.throw(TimeoutError)
+        with contextlib.suppress(CancelledError):
+            coro.throw(CancelledError)
         return None, False
     return res.fetch(), True

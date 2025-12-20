@@ -96,7 +96,7 @@ impl PyGenHandle {
                     if let Some((suspension, _idx)) = &self.parent {
                         suspension.error(py, runtime.get(), err);
                     } else {
-                        println!("UNHANDLED PYGEN_ERROR {err:?}");
+                        println!("UNHANDLED PYGEN_ERROR {:?}", self.coro.bind(py));
                         err.display(py);
                     }
                 }
@@ -201,7 +201,7 @@ impl PyGenCtxHandle {
                     if let Some((suspension, _idx)) = &self.parent {
                         suspension.error(py, runtime.get(), err);
                     } else {
-                        println!("UNHANDLED PYGEN_ERROR {err:?}");
+                        println!("UNHANDLED PYGEN_ERROR {:?}", self.coro.bind(py));
                         err.display(py);
                     }
                 }
@@ -295,7 +295,7 @@ impl PyAsyncGenHandle {
                     if let Some((suspension, _idx)) = &self.parent {
                         suspension.error(py, runtime.get(), err);
                     } else {
-                        println!("UNHANDLED PYGEN_ERROR {err:?}");
+                        println!("UNHANDLED PYGEN_ERROR {:?}", self.coro.bind(py));
                         err.display(py);
                     }
                 }
@@ -397,7 +397,7 @@ impl PyAsyncGenCtxHandle {
                     if let Some((suspension, _idx)) = &self.parent {
                         suspension.error(py, runtime.get(), err);
                     } else {
-                        println!("UNHANDLED PYGEN_ERROR {err:?}");
+                        println!("UNHANDLED PYGEN_ERROR {:?}", self.coro.bind(py));
                         err.display(py);
                     }
                 }
