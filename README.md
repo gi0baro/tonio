@@ -61,6 +61,7 @@ Both `run` and `main` accept options, specifically:
 | `threads` | Number of runtime threads | # of CPU cores |
 | `threads_blocking` | Maximum number of blocking threads | 128 |
 | `threads_blocking_timeout` | Idle timeout for blocking threads (in seconds) | 30 |
+| `context` | enable `contextvars` usage in coroutines | `False` |
 
 ### Events
 
