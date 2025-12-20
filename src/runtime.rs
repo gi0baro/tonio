@@ -94,6 +94,7 @@ pub struct Runtime {
     // ssock_r: RwLock<Py<PyAny>>,
     // ssock_w: RwLock<Py<PyAny>>,
     threads_cb: usize,
+    use_pyctx: bool,
 }
 
 impl Runtime {
@@ -157,7 +158,7 @@ impl Runtime {
             match interest {
                 Interest::READABLE => self._reader_rem(py, fd),
                 Interest::WRITABLE => self._writer_rem(py, fd),
-                _ => unreachable!()
+                _ => unreachable!(),
             };
         }
 
@@ -240,7 +241,13 @@ impl Runtime {
     // }
 
     #[inline]
-    fn handle_io_py(&self, py: Python, event: &event::Event, handle: &PyHandleData, deregs: &mut Vec<(usize, Interest)>) {
+    fn handle_io_py(
+        &self,
+        py: Python,
+        event: &event::Event,
+        handle: &PyHandleData,
+        deregs: &mut Vec<(usize, Interest)>,
+    ) {
         if let Some(reader) = &handle.reader
             && event.is_readable()
         {
@@ -317,6 +324,7 @@ impl Runtime {
         threads: usize,
         threads_blocking: usize,
         threads_blocking_timeout: u64,
+        context: bool,
     ) -> PyResult<Self> {
         let poll = Poll::new()?;
         let waker = Waker::new(poll.registry(), Token(0))?;
@@ -346,6 +354,7 @@ impl Runtime {
             // ssock_r: RwLock::new(py.None()),
             // ssock_w: RwLock::new(py.None()),
             threads_cb: threads,
+            use_pyctx: context,
         })
     }
 
@@ -459,10 +468,26 @@ impl Runtime {
     // }
 
     fn _spawn_pygen(&self, py: Python, coro: Py<PyAny>) {
+        if self.use_pyctx {
+            let ctx = unsafe {
+                let ret = pyo3::ffi::PyContext_CopyCurrent();
+                Bound::from_owned_ptr(py, ret).unbind()
+            };
+            self.add_handle(Box::new(crate::handles::PyGenCtxHandle::new(py, coro, ctx)));
+            return;
+        }
         self.add_handle(Box::new(crate::handles::PyGenHandle::new(py, coro)));
     }
 
     fn _spawn_pyasyncgen(&self, py: Python, coro: Py<PyAny>) {
+        if self.use_pyctx {
+            let ctx = unsafe {
+                let ret = pyo3::ffi::PyContext_CopyCurrent();
+                Bound::from_owned_ptr(py, ret).unbind()
+            };
+            self.add_handle(Box::new(crate::handles::PyAsyncGenCtxHandle::new(py, coro, ctx)));
+            return;
+        }
         self.add_handle(Box::new(crate::handles::PyAsyncGenHandle::new(py, coro)));
     }
 
