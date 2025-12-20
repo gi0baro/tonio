@@ -127,9 +127,11 @@ def main():
 
 ### Time-related functions
 
-- `tonio.time()`: a function returning the runtime's clock
-- `tonio.sleep(delay)`: a coroutine you can `yield` on to sleep (delay is in seconds)
-- `tonio.timeout(coro, timeout)`: a coroutine you can `yield` on returning a tuple `(output, success)`. If the coroutine succeeds in the given time then the pair `(output, True)` is returned. Otherwise this will return `(None, False)`.
+- `tonio.time.time()`: a function returning the runtime's clock
+- `tonio.time.sleep(delay)`: a coroutine you can `yield` on to sleep (delay is in seconds)
+- `tonio.time.timeout(coro, timeout)`: a coroutine you can `yield` on returning a tuple `(output, success)`. If the coroutine succeeds in the given time then the pair `(output, True)` is returned. Otherwise this will return `(None, False)`.
+
+> **Note**: `time.sleep` is also exported to the main `tonio` module.
 
 ### Synchronization primitives
 
