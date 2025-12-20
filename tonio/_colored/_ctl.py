@@ -8,6 +8,24 @@ _Params = ParamSpec('_Params')
 _Return = TypeVar('_Return')
 
 
+class AsyncSpawnJoin:
+    __slots__ = ['_waiter', '_res', '_errs']
+
+    def __init__(self, waiter, res, errs):
+        self._waiter = waiter
+        self._res = res
+        self._errs = errs
+
+    def __await__(self):
+        return self._wait().__await__()
+
+    async def _wait(self):
+        await self._waiter
+        if self._errs:
+            raise ExceptionGroup('SpawnExceptionGroup', self._errs)
+        return self._res.fetch()
+
+
 def spawn(*coros) -> Awaitable[Any]:
     events = []
     res = ResultHolder(len(coros))
@@ -28,14 +46,7 @@ def spawn(*coros) -> Awaitable[Any]:
         get_runtime()._spawn_pyasyncgen(wrapper(idx, coro, event))
 
     waiter = Waiter(*events)
-
-    async def join():
-        await waiter
-        if errs:
-            raise ExceptionGroup('SpawnExceptionGroup', errs)
-        return res.fetch()
-
-    return join()
+    return AsyncSpawnJoin(waiter, res, errs)
 
 
 async def spawn_blocking(fn: Callable[_Params, _Return], /, *args: _Params.args, **kwargs: _Params.kwargs) -> _Return:
