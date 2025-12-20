@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::{
-    handles::{BoxedHandle, Handle, PyAsyncGenHandle, PyGenHandle, PyGenThrower},
+    handles::{self, BoxedHandle, Handle},
     runtime::Runtime,
     time::Timer,
 };
@@ -92,25 +92,10 @@ impl Handle for Py<Event> {
     }
 }
 
-// #[repr(u8)]
-// enum WaiterState {
-//     Inited = 0,
-//     Registered = 1,
-//     Notified = 2,
-//     Done = 3,
-// }
-
-// TO HANDLE TIMEOUTS: we need timers to capture waker. Once the timer gets called,
-// it should call the waker, that should call the `skip` method of suspend.
-// => Waker should probably be wrapped in Arc
 #[pyclass(frozen, module = "tonio._tonio")]
 pub(crate) struct Waiter {
-    // state: atomic::AtomicU8,
     registered: atomic::AtomicBool,
-    // TODO: support multiple events
-    // event: Py<Event>,
     events: Vec<Py<Event>>,
-    // TODO: actually handle timeout and relative abort
     timeout: Option<usize>,
 }
 
@@ -119,7 +104,6 @@ impl Waiter {
         let slf = Self {
             registered: false.into(),
             events: vec![event],
-            // state: (WaiterState::Inited as u8).into(),
             timeout,
         };
         Py::new(py, slf).unwrap()
@@ -152,62 +136,24 @@ impl Waiter {
         }
     }
 
-    // THIS SHOULD BE CALLED ONLY BY LOOP, CREATE AN INSTANCE OF A NEW OBJ
-    pub(crate) fn register_pygen(pyself: Py<Self>, py: Python, runtime: Py<Runtime>, parent: &PyGenHandle) {
-        // println!("waiter registered");
-        // self.event.get().add_waiter(waiter);
-        // CREATE WAKER:
-        //  - if timeout, it's also a timer
-        //  - event needs to track reference and call the wakers
-        //  HOW DO WE KEEP LOOP REF IN WAKER?
+    pub(crate) fn register_pygen(
+        pyself: Py<Self>,
+        py: Python,
+        runtime: Py<Runtime>,
+        target: SuspensionTarget,
+        parent: Option<SuspensionData>,
+    ) {
         let rself = pyself.get();
-        // if rself
-        //     .state
-        //     .compare_exchange(
-        //         WaiterState::Inited as u8,
-        //         WaiterState::Registered as u8,
-        //         atomic::Ordering::Release,
-        //         atomic::Ordering::Relaxed,
-        //     )
-        //     .is_ok()
-        // {
-        if rself
-            .registered
-            .compare_exchange(false, true, atomic::Ordering::Release, atomic::Ordering::Relaxed)
-            .is_ok()
-        {
-            // let waiter = Waiter { stack: parent.stack.as_ref().map(|v| v.clone_ref(py)), parent: parent.coro.clone_ref(py) };
-            // let waker = Waker { runtime, waiter };
-            let sentinel = rself.build_sentinel(py);
-            let suspension = Suspension::from_pygen(py, parent, sentinel);
-            rself.register(py, runtime, suspension);
-        } else {
-            panic!()
-        }
-    }
-
-    pub(crate) fn register_pyasyncgen(pyself: Py<Self>, py: Python, runtime: Py<Runtime>, parent: &PyAsyncGenHandle) {
-        let rself = pyself.get();
-        // if rself
-        //     .state
-        //     .compare_exchange(
-        //         WaiterState::Inited as u8,
-        //         WaiterState::Registered as u8,
-        //         atomic::Ordering::Release,
-        //         atomic::Ordering::Relaxed,
-        //     )
-        //     .is_ok()
-        // {
         if rself
             .registered
             .compare_exchange(false, true, atomic::Ordering::Release, atomic::Ordering::Relaxed)
             .is_ok()
         {
             let sentinel = rself.build_sentinel(py);
-            let suspension = Suspension::from_pyasyncgen(py, parent, sentinel);
+            let suspension = Suspension::from_pygen(target, parent, sentinel);
             rself.register(py, runtime, suspension);
         } else {
-            panic!()
+            panic!("Waiter already registered")
         }
     }
 
@@ -222,7 +168,6 @@ impl Waiter {
         Self {
             registered: false.into(),
             events,
-            // state: (WaiterState::Inited as u8).into(),
             timeout: None,
         }
     }
@@ -324,19 +269,12 @@ impl Waker {
 
 pub(crate) type SuspensionData = (Arc<Suspension>, usize);
 
-enum SuspensionTarget {
-    PyGen(Py<PyAny>),
-    PyAsyncGen(Py<PyAny>),
+pub(crate) enum SuspensionTarget {
+    Gen(Py<PyAny>),
+    GenCtx((Py<PyAny>, Py<PyAny>)),
+    AsyncGen(Py<PyAny>),
+    AsyncGenCtx((Py<PyAny>, Py<PyAny>)),
 }
-
-// impl SuspensionTarget {
-//     fn clone_ref(&self, py: Python) -> Py<PyAny> {
-//         match self {
-//             Self::PyGen(v) => v.clone_ref(py),
-//             Self::PyAsyncGen(v) => v.clone_ref(py),
-//         }
-//     }
-// }
 
 pub(crate) struct Suspension {
     parent: Option<SuspensionData>,
@@ -346,20 +284,14 @@ pub(crate) struct Suspension {
 }
 
 impl Suspension {
-    pub(crate) fn from_pygen(py: Python, coro_handle: &PyGenHandle, sentinel: Option<Sentinel>) -> Arc<Self> {
+    pub(crate) fn from_pygen(
+        target: SuspensionTarget,
+        parent: Option<SuspensionData>,
+        sentinel: Option<Sentinel>,
+    ) -> Arc<Self> {
         Self {
-            parent: coro_handle.parent.clone(),
-            target: SuspensionTarget::PyGen(coro_handle.coro.clone_ref(py)),
-            consumed: false.into(),
-            sentinel,
-        }
-        .into()
-    }
-
-    pub(crate) fn from_pyasyncgen(py: Python, handle: &PyAsyncGenHandle, sentinel: Option<Sentinel>) -> Arc<Self> {
-        Self {
-            parent: handle.parent.clone(),
-            target: SuspensionTarget::PyAsyncGen(handle.coro.clone_ref(py)),
+            parent,
+            target,
             consumed: false.into(),
             sentinel,
         }
@@ -368,20 +300,36 @@ impl Suspension {
 
     fn to_handle(&self, py: Python, value: Py<PyAny>) -> BoxedHandle {
         match &self.target {
-            SuspensionTarget::PyGen(target) => {
-                // println!("suspension resume {:?} {:?}", target.bind(py), value.bind(py));
-                let handle = PyGenHandle {
+            SuspensionTarget::Gen(target) => {
+                let handle = handles::PyGenHandle {
                     parent: self.parent.clone(),
                     coro: target.clone_ref(py),
                     value,
                 };
                 Box::new(handle)
             }
-            SuspensionTarget::PyAsyncGen(target) => {
-                // println!("suspension resume {:?} {:?}", target.bind(py), value.bind(py));
-                let handle = PyAsyncGenHandle {
+            SuspensionTarget::AsyncGen(target) => {
+                let handle = handles::PyAsyncGenHandle {
                     parent: self.parent.clone(),
                     coro: target.clone_ref(py),
+                    value,
+                };
+                Box::new(handle)
+            }
+            SuspensionTarget::GenCtx((target, ctx)) => {
+                let handle = handles::PyGenCtxHandle {
+                    parent: self.parent.clone(),
+                    coro: target.clone_ref(py),
+                    ctx: ctx.clone_ref(py),
+                    value,
+                };
+                Box::new(handle)
+            }
+            SuspensionTarget::AsyncGenCtx((target, ctx)) => {
+                let handle = handles::PyAsyncGenCtxHandle {
+                    parent: self.parent.clone(),
+                    coro: target.clone_ref(py),
+                    ctx: ctx.clone_ref(py),
                     value,
                 };
                 Box::new(handle)
@@ -392,19 +340,36 @@ impl Suspension {
     fn to_throw_handle(&self, py: Python, err: PyErr) -> BoxedHandle {
         let value = err.into_value(py).as_any().clone_ref(py);
         match &self.target {
-            SuspensionTarget::PyGen(target) => {
-                // println!("suspension throw {:?}", target.bind(py));
-                let handle = PyGenThrower {
+            SuspensionTarget::Gen(target) => {
+                let handle = handles::PyGenThrower {
                     parent: self.parent.clone(),
                     coro: target.clone_ref(py),
                     value,
                 };
                 Box::new(handle)
             }
-            SuspensionTarget::PyAsyncGen(target) => {
-                let handle = PyGenThrower {
+            SuspensionTarget::AsyncGen(target) => {
+                let handle = handles::PyGenThrower {
                     parent: self.parent.clone(),
                     coro: target.clone_ref(py),
+                    value,
+                };
+                Box::new(handle)
+            }
+            SuspensionTarget::GenCtx((target, ctx)) => {
+                let handle = handles::PyGenCtxThrower {
+                    parent: self.parent.clone(),
+                    coro: target.clone_ref(py),
+                    ctx: ctx.clone_ref(py),
+                    value,
+                };
+                Box::new(handle)
+            }
+            SuspensionTarget::AsyncGenCtx((target, ctx)) => {
+                let handle = handles::PyGenCtxThrower {
+                    parent: self.parent.clone(),
+                    coro: target.clone_ref(py),
+                    ctx: ctx.clone_ref(py),
                     value,
                 };
                 Box::new(handle)

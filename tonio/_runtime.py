@@ -26,7 +26,7 @@ class Runtime(_Runtime):
         res = ResultHolder()
         is_exc = False
 
-        def wrapper():
+        def runner():
             nonlocal is_exc
             try:
                 ret = yield coro
@@ -42,7 +42,7 @@ class Runtime(_Runtime):
             self.stop()
 
         self._spawn_pygen(watcher())
-        self._spawn_pygen(wrapper())
+        self._spawn_pygen(runner())
         self.run_forever()
 
         ret = res.fetch()
@@ -55,7 +55,7 @@ class Runtime(_Runtime):
         res = ResultHolder()
         is_exc = False
 
-        async def wrapper():
+        async def runner():
             nonlocal is_exc
             try:
                 ret = await coro
@@ -71,7 +71,7 @@ class Runtime(_Runtime):
             self.stop()
 
         self._spawn_pyasyncgen(watcher())
-        self._spawn_pyasyncgen(wrapper())
+        self._spawn_pyasyncgen(runner())
         self.run_forever()
 
         ret = res.fetch()
@@ -83,18 +83,20 @@ class Runtime(_Runtime):
         self._stopping = True
 
 
-def run(coro, **opts):
-    # print(
-    #     coro,
-    #     inspect.isasyncgen(coro),
-    #     inspect.isasyncgenfunction(coro),
-    #     inspect.iscoroutine(coro),
-    #     inspect.iscoroutinefunction(coro),
-    # )
-    opts['threads'] = opts.get('threads') or multiprocessing.cpu_count()
-    opts['threads_blocking'] = opts.get('threads_blocking') or 128
-    opts['threads_blocking_timeout'] = opts.get('threads_blocking_timeout') or 30
-    runtime = Runtime(**opts)
+def run(
+    coro,
+    context: bool = False,
+    threads: int | None = None,
+    threads_blocking: int = 128,
+    threads_blocking_timeout: int = 30,
+):
+    threads = threads or multiprocessing.cpu_count()
+    runtime = Runtime(
+        threads=threads,
+        threads_blocking=threads_blocking,
+        threads_blocking_timeout=threads_blocking_timeout,
+        context=context,
+    )
     _set_runtime(runtime)
     runner = runtime.run_pyasyncgen_until_complete if is_asyncg(coro) else runtime.run_pygen_until_complete
     return runner(coro)
