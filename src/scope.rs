@@ -35,9 +35,7 @@ impl Scope {
         }
         let py = pygen.py();
         let event = Py::new(py, Event::new()).unwrap();
-        let wevent = Py::new(py, Event::new()).unwrap();
-        wevent.get().set(py);
-        let waiter = Py::new(py, Waiter::new(vec![wevent])).unwrap();
+        let waiter = Waiter::new_for_suspension();
         let coro = pygen.call1((event.clone_ref(py), waiter))?.unbind();
         let mut guard = self.stack.lock().unwrap();
         guard.push((coro.clone_ref(py), event));

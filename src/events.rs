@@ -1,3 +1,4 @@
+use arc_swap::ArcSwapOption;
 use pyo3::{IntoPyObjectExt, prelude::*, types::PyList};
 use std::{
     collections::VecDeque,
@@ -90,7 +91,7 @@ impl Handle for Py<Event> {
 #[pyclass(frozen, module = "tonio._tonio")]
 pub(crate) struct Waiter {
     registered: atomic::AtomicBool,
-    cancelled: Mutex<Option<Arc<atomic::AtomicBool>>>,
+    cancelled: ArcSwapOption<atomic::AtomicBool>,
     events: Vec<Py<Event>>,
     timeout: Option<usize>,
 }
@@ -99,25 +100,36 @@ impl Waiter {
     fn from_event(py: Python, event: Py<Event>, timeout: Option<usize>) -> Py<Self> {
         let slf = Self {
             registered: false.into(),
-            cancelled: Mutex::new(None),
+            // cancelled: Mutex::new(None),
+            cancelled: None.into(),
             events: vec![event],
             timeout,
         };
         Py::new(py, slf).unwrap()
     }
 
+    pub fn new_for_suspension() -> Self {
+        Self {
+            registered: false.into(),
+            cancelled: Some(Arc::new(false.into())).into(),
+            events: vec![],
+            timeout: None,
+        }
+    }
+
     fn build_sentinel(&self, py: Python) -> Option<Sentinel> {
         match self.events.len() {
-            1 => None,
+            0..1 => None,
             v => Some(Sentinel::new(py, v)),
         }
     }
 
     fn register(&self, py: Python, runtime: Py<Runtime>, suspension: Arc<Suspension>) {
-        {
-            let mut guard = self.cancelled.lock().unwrap();
-            *guard = Some(suspension.cancelled.clone());
+        if self.events.is_empty() {
+            suspension.resume(py, runtime.get(), py.None(), 0);
+            return;
         }
+        self.cancelled.swap(Some(suspension.cancelled.clone()));
         for (idx, event) in self.events.iter().enumerate() {
             let waker = Waker {
                 runtime: runtime.clone_ref(py),
@@ -127,7 +139,6 @@ impl Waiter {
             event.get().add_waker(py, waker);
         }
         if let Some(timeout) = self.timeout {
-            // println!("TIMER for susp {:?}", suspension);
             let when = runtime.get()._get_clock() + (timeout as u128);
             let timer = Timer {
                 when,
@@ -151,8 +162,7 @@ impl Waiter {
             .is_ok()
         {
             let sentinel = rself.build_sentinel(py);
-            let suspension = Suspension::from_pygen(target, parent, sentinel);
-            // println!("REGISTER WAITER {:?} {:?}", pyself, suspension);
+            let suspension = Suspension::from_pygen(target, parent, sentinel, rself.cancelled.load_full());
             rself.register(py, runtime, suspension);
         } else {
             panic!("Waiter already registered")
@@ -169,7 +179,7 @@ impl Waiter {
     pub fn new(events: Vec<Py<Event>>) -> Self {
         Self {
             registered: false.into(),
-            cancelled: Mutex::new(None),
+            cancelled: None.into(),
             events,
             timeout: None,
         }
@@ -194,11 +204,11 @@ impl Waiter {
     fn throw(&self, value: Bound<PyAny>) -> PyResult<()> {
         let py = value.py();
         let err = PyErr::from_value(value);
-        if err.is_instance_of::<crate::errors::CancelledError>(py) {
-            let guard = self.cancelled.lock().unwrap();
-            if let Some(v) = guard.as_ref() {
-                v.store(true, atomic::Ordering::Release);
-            }
+        if err.is_instance_of::<crate::errors::CancelledError>(py)
+            && let Some(cancelled) = self.cancelled.load().as_ref()
+        {
+            // println!("waiter cancelled");
+            cancelled.store(true, atomic::Ordering::Release);
         }
         Err(err)
     }
@@ -303,10 +313,15 @@ impl Suspension {
         target: SuspensionTarget,
         parent: Option<SuspensionData>,
         sentinel: Option<Sentinel>,
+        cancelled: Option<Arc<atomic::AtomicBool>>,
     ) -> Arc<Self> {
-        let cancelled = parent
-            .as_ref()
-            .map_or_else(|| Arc::new(false.into()), |v| v.0.cancelled.clone());
+        let cancelled = if let Some(v) = cancelled {
+            v
+        } else {
+            parent
+                .as_ref()
+                .map_or_else(|| Arc::new(false.into()), |v| v.0.cancelled.clone())
+        };
         Self {
             parent,
             target,
@@ -404,6 +419,7 @@ impl Suspension {
 
     pub fn resume(&self, py: Python, runtime: &Runtime, value: Py<PyAny>, order: usize) {
         if self.cancelled.load(atomic::Ordering::Acquire) {
+            // println!("suspension resume aborted");
             return;
         }
         if let Some(sentinel) = &self.sentinel {
@@ -418,7 +434,6 @@ impl Suspension {
             .compare_exchange(false, true, atomic::Ordering::Release, atomic::Ordering::Relaxed)
             .is_ok()
         {
-            // println!("suspension resume call {:?}", value.bind(py));
             runtime.add_handle(self.to_handle(py, value));
         }
     }

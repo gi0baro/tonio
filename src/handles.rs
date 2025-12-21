@@ -57,6 +57,7 @@ impl PyGenHandle {
                             SuspensionTarget::Gen(self.coro.clone_ref(py)),
                             self.parent.clone(),
                             None,
+                            None,
                         );
                         let next = Self {
                             parent: Some((parent, 0)),
@@ -160,6 +161,7 @@ impl PyGenCtxHandle {
                         let parent = Suspension::from_pygen(
                             SuspensionTarget::GenCtx((self.coro.clone_ref(py), self.ctx.clone_ref(py))),
                             self.parent.clone(),
+                            None,
                             None,
                         );
                         let next = Self {
