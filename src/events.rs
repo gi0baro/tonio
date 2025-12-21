@@ -19,7 +19,6 @@ pub(crate) struct Event {
 impl Event {
     fn notify(&self, py: Python) {
         let mut guard = self.watchers.lock().unwrap();
-        // println!("event notify {:?}", guard.len());
         while let Some(waker) = guard.pop_front() {
             waker.wake(py);
         }
@@ -33,15 +32,12 @@ impl Event {
     }
 
     fn add_waker(&self, py: Python, waker: Waker) {
-        // println!("event got waker");
+        let mut guard = self.watchers.lock().unwrap();
         if self.flag.load(atomic::Ordering::Acquire) {
-            // println!("direct wake call");
             waker.wake(py);
             return;
         }
-        let mut guard = self.watchers.lock().unwrap();
         guard.push_back(waker);
-        // println!("event stored waker");
     }
 }
 
@@ -56,7 +52,6 @@ impl Event {
     }
 
     pub(crate) fn set(&self, py: Python) {
-        // println!("event set called");
         if self
             .flag
             .compare_exchange(false, true, atomic::Ordering::Release, atomic::Ordering::Relaxed)
