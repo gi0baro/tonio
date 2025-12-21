@@ -1,6 +1,6 @@
 use pyo3::prelude::*;
 use std::cmp::Ordering;
-use std::sync::{Arc, atomic};
+use std::sync::Arc;
 
 use crate::events::Suspension;
 use crate::handles::Handle;
@@ -8,7 +8,6 @@ use crate::handles::Handle;
 pub struct Timer {
     pub(crate) when: u128,
     pub(crate) target: Arc<Suspension>,
-    pub(crate) cancelled: Arc<atomic::AtomicBool>,
 }
 
 // impl Timer {
@@ -54,9 +53,6 @@ impl Handle for Timer {
         runtime: Py<crate::runtime::Runtime>,
         _state: &mut crate::runtime::RuntimeCBHandlerState,
     ) {
-        if self.cancelled.load(atomic::Ordering::Acquire) {
-            return;
-        }
         self.target.resume(py, runtime.get(), py.None(), 0);
     }
 }

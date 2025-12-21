@@ -3,6 +3,7 @@ import pytest
 import tonio
 import tonio._colored
 import tonio._colored._net._socket
+import tonio._colored._scope
 import tonio._colored._time
 import tonio._net._socket
 import tonio._time
@@ -17,9 +18,11 @@ _runtime_wctx = Runtime(threads=4, threads_blocking=8, threads_blocking_timeout=
 @pytest.fixture(scope='function')
 def runtime(monkeypatch):
     monkeypatch.setattr(tonio._ctl, 'get_runtime', lambda: _runtime)
+    monkeypatch.setattr(tonio._scope, 'get_runtime', lambda: _runtime)
     monkeypatch.setattr(tonio._time, 'get_runtime', lambda: _runtime)
     monkeypatch.setattr(tonio._net._socket, 'get_runtime', lambda: _runtime)
     monkeypatch.setattr(tonio._colored._ctl, 'get_runtime', lambda: _runtime)
+    monkeypatch.setattr(tonio._colored._scope, 'get_runtime', lambda: _runtime)
     monkeypatch.setattr(tonio._colored._time, 'get_runtime', lambda: _runtime)
     monkeypatch.setattr(tonio._colored._net._socket, 'get_runtime', lambda: _runtime)
     return _runtime
@@ -28,9 +31,11 @@ def runtime(monkeypatch):
 @pytest.fixture(scope='function')
 def runtime_with_ctx(monkeypatch):
     monkeypatch.setattr(tonio._ctl, 'get_runtime', lambda: _runtime_wctx)
+    monkeypatch.setattr(tonio._scope, 'get_runtime', lambda: _runtime)
     monkeypatch.setattr(tonio._time, 'get_runtime', lambda: _runtime_wctx)
     monkeypatch.setattr(tonio._net._socket, 'get_runtime', lambda: _runtime_wctx)
     monkeypatch.setattr(tonio._colored._ctl, 'get_runtime', lambda: _runtime_wctx)
+    monkeypatch.setattr(tonio._colored._scope, 'get_runtime', lambda: _runtime)
     monkeypatch.setattr(tonio._colored._time, 'get_runtime', lambda: _runtime_wctx)
     monkeypatch.setattr(tonio._colored._net._socket, 'get_runtime', lambda: _runtime_wctx)
     return _runtime_wctx
