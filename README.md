@@ -58,10 +58,10 @@ Both `run` and `main` accept options, specifically:
 
 | option name | description | default |
 | --- | --- | --- |
+| `context` | enable `contextvars` usage in coroutines | `False` |
 | `threads` | Number of runtime threads | # of CPU cores |
 | `threads_blocking` | Maximum number of blocking threads | 128 |
 | `threads_blocking_timeout` | Idle timeout for blocking threads (in seconds) | 30 |
-| `context` | enable `contextvars` usage in coroutines | `False` |
 
 ### Events
 
@@ -124,6 +124,33 @@ def read_file(path):
 def main():
     file_data = yield tonio.spawn_blocking(read_file, "sometext.txt")
 ```
+
+### Scopes and cancellations
+
+TonIO provides a `scope` context, that lets you cancel work spawned within it:
+
+```python
+import tonio
+
+def slow_push(target, sleep):
+    yield tonio.sleep(sleep)
+    target.append(True)
+
+@tonio.main
+def main():
+    values = []
+    with tonio.scope() as scope:
+        scope.spawn(_slow_push(values, 0.1))
+        scope.spawn(_slow_push(values, 2))
+        yield tonio.sleep(0.2)
+        scope.cancel()
+    yield scope()
+    assert len(values) == 1
+```
+
+When you `yield` on the scope, it will wait for all the spawned coroutines to end. If the scope was canceled, then all the pending coroutines will be canceled.
+
+> **Note:** the *colored* version of scope, doesn't require to be `await`ed, as it will *yield* on exit.
 
 ### Time-related functions
 
