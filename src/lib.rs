@@ -9,6 +9,7 @@ mod io;
 mod net;
 mod py;
 mod runtime;
+mod scope;
 mod sync;
 mod time;
 
@@ -47,6 +48,7 @@ fn _tonio(module: &Bound<PyModule>) -> PyResult<()> {
     events::init_pymodule(module)?;
     net::init_pymodule(module)?;
     runtime::init_pymodule(module)?;
+    scope::init_pymodule(module)?;
     sync::init_pymodule(module)?;
 
     Ok(())
