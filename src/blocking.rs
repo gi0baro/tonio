@@ -1,15 +1,35 @@
 use crossbeam_channel as channel;
-use pyo3::prelude::*;
+use pyo3::{PyTypeInfo, prelude::*};
 use std::{
     sync::{Arc, atomic},
     thread, time,
 };
 
+use crate::errors::CancelledError;
 use crate::events::{Event, ResultHolder};
+
+#[pyclass(frozen, module = "tonio._tonio")]
+pub(crate) struct BlockingTaskCtl {
+    tid: atomic::AtomicU64,
+}
+
+#[pymethods]
+impl BlockingTaskCtl {
+    fn abort(&self, py: Python) {
+        let tid = self.tid.load(atomic::Ordering::Acquire);
+        if tid > 0 {
+            let err = CancelledError::type_object(py);
+            unsafe {
+                pyo3::ffi::PyThreadState_SetAsyncExc(tid.cast_signed(), err.as_ptr());
+            }
+        }
+    }
+}
 
 pub(crate) struct BlockingTask {
     event: Py<Event>,
     result: Py<ResultHolder>,
+    ctl: Py<BlockingTaskCtl>,
     target: Py<PyAny>,
     args: Py<PyAny>,
     kwargs: Option<Py<PyAny>>,
@@ -21,20 +41,27 @@ impl BlockingTask {
         target: Py<PyAny>,
         args: Py<PyAny>,
         kwargs: Option<Py<PyAny>>,
-    ) -> (Self, Py<Event>, Py<ResultHolder>) {
+    ) -> (Self, Py<BlockingTaskCtl>, Py<Event>, Py<ResultHolder>) {
         let event = Py::new(py, Event::new()).unwrap();
-        let rh = Py::new(py, ResultHolder::new(py, 1)).unwrap();
+        let rh = Py::new(py, ResultHolder::new(py, 2)).unwrap();
+        let ctl = Py::new(py, BlockingTaskCtl { tid: 0.into() }).unwrap();
         let task = Self {
             event: event.clone_ref(py),
             result: rh.clone_ref(py),
+            ctl: ctl.clone_ref(py),
             target,
             args,
             kwargs,
         };
-        (task, event, rh)
+        (task, ctl, event, rh)
     }
 
     fn run(self, py: Python) {
+        self.ctl
+            .get()
+            .tid
+            .store(crate::py::thread_ident(py).unwrap(), atomic::Ordering::Release);
+
         match unsafe {
             let callable = self.target.into_ptr();
             let args = self.args.into_ptr();
@@ -45,11 +72,14 @@ impl BlockingTask {
             Bound::from_owned_ptr_or_err(py, ret)
         } {
             Ok(v) => {
-                self.result.get().store(v.unbind(), None);
+                let result = self.result.get();
+                result.store(pyo3::types::PyBool::new(py, false).as_any().clone().unbind(), Some(0));
+                result.store(v.unbind(), Some(1));
             }
             Err(err) => {
-                // TODO: handle possible cancellation, need to raise
-                self.result.get().store(err.value(py).as_any().clone().unbind(), None);
+                let result = self.result.get();
+                result.store(pyo3::types::PyBool::new(py, true).as_any().clone().unbind(), Some(0));
+                result.store(err.value(py).as_any().clone().unbind(), Some(1));
             }
         }
 
@@ -118,4 +148,10 @@ fn blocking_worker(queue: channel::Receiver<BlockingTask>, timeout: time::Durati
             task.run(py);
         }
     });
+}
+
+pub(crate) fn init_pymodule(module: &Bound<PyModule>) -> PyResult<()> {
+    module.add_class::<BlockingTaskCtl>()?;
+
+    Ok(())
 }

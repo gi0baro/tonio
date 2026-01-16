@@ -44,6 +44,7 @@ fn _tonio(module: &Bound<PyModule>) -> PyResult<()> {
     module.add_function(pyo3::wrap_pyfunction!(get_runtime, module)?)?;
     module.add_function(pyo3::wrap_pyfunction!(set_runtime, module)?)?;
 
+    blocking::init_pymodule(module)?;
     errors::init_pymodule(module)?;
     events::init_pymodule(module)?;
     net::init_pymodule(module)?;

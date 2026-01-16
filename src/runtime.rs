@@ -498,12 +498,16 @@ impl Runtime {
         f: Py<PyAny>,
         args: Py<PyAny>,
         kwargs: Option<Py<PyAny>>,
-    ) -> PyResult<(Py<crate::events::Event>, Py<crate::events::ResultHolder>)> {
-        let (task, event, rh) = crate::blocking::BlockingTask::new(py, f, args, kwargs);
+    ) -> PyResult<(
+        Py<crate::blocking::BlockingTaskCtl>,
+        Py<crate::events::Event>,
+        Py<crate::events::ResultHolder>,
+    )> {
+        let (task, ctl, event, rh) = crate::blocking::BlockingTask::new(py, f, args, kwargs);
         self.blocking_pool
             .run(task)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-        Ok((event, rh))
+        Ok((ctl, event, rh))
     }
 
     #[pyo3(signature = (fd, persisted = true))]

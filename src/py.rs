@@ -1,6 +1,7 @@
 use pyo3::{prelude::*, sync::PyOnceLock};
 
 static SOCKET: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+static THREADING: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 
 fn socket(py: Python<'_>) -> PyResult<&Bound<'_, PyAny>> {
     Ok(SOCKET
@@ -8,8 +9,20 @@ fn socket(py: Python<'_>) -> PyResult<&Bound<'_, PyAny>> {
         .bind(py))
 }
 
+fn threading(py: Python<'_>) -> PyResult<&Bound<'_, PyAny>> {
+    Ok(THREADING
+        .get_or_try_init(py, || py.import("threading").map(Into::into))?
+        .bind(py))
+}
+
 pub(crate) fn sock(py: Python) -> PyResult<Bound<PyAny>> {
     socket(py)?.getattr(pyo3::intern!(py, "socket"))
+}
+
+pub(crate) fn thread_ident(py: Python) -> PyResult<u64> {
+    threading(py)?
+        .call_method0(pyo3::intern!(py, "get_ident"))?
+        .extract::<u64>()
 }
 
 pub(crate) fn copy_context(py: Python) -> Py<PyAny> {

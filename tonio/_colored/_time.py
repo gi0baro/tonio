@@ -15,11 +15,18 @@ def sleep(timeout: int | float) -> Awaitable[None]:
 async def timeout(coro: Awaitable[_T], timeout: int | float) -> tuple[None | _T, bool]:
     done = Event()
     res = ResultHolder()
+    errs = []
 
     async def wrapper():
-        ret = await coro
-        res.store(ret)
-        done.set()
+        try:
+            ret = await coro
+            res.store(ret)
+        except CancelledError:
+            pass
+        except Exception as exc:
+            errs.append(exc)
+        finally:
+            done.set()
 
     get_runtime()._spawn_pyasyncgen(wrapper())
 
@@ -28,4 +35,7 @@ async def timeout(coro: Awaitable[_T], timeout: int | float) -> tuple[None | _T,
         with contextlib.suppress(CancelledError):
             coro.throw(CancelledError)
         return None, False
+    if errs:
+        [err] = errs
+        raise err
     return res.fetch(), True

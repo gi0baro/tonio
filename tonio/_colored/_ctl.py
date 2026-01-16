@@ -1,6 +1,7 @@
+import contextlib
 from typing import Any, Awaitable, Callable, ParamSpec, TypeVar
 
-from .._tonio import ResultHolder, get_runtime
+from .._tonio import CancelledError, ResultHolder, get_runtime
 from ._events import Event, Waiter
 
 
@@ -50,9 +51,17 @@ def spawn(*coros) -> Awaitable[Any]:
 
 
 async def spawn_blocking(fn: Callable[_Params, _Return], /, *args: _Params.args, **kwargs: _Params.kwargs) -> _Return:
-    event, res = get_runtime()._spawn_blocking(fn, *args, **kwargs)
-    await event.waiter(None)
-    return res.fetch()
+    ctl, event, res = get_runtime()._spawn_blocking(fn, *args, **kwargs)
+    with contextlib.suppress(CancelledError):
+        await event.waiter(None)
+    err, val = res.fetch()
+    if err is None:
+        ctl.abort()
+        await event.waiter(None)
+        err, val = res.fetch()
+    if err is True:
+        raise val
+    return val
 
 
 async def yield_now():
