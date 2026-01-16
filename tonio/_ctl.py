@@ -1,7 +1,8 @@
+import contextlib
 from typing import Callable, ParamSpec, TypeVar
 
 from ._events import Event, Waiter
-from ._tonio import ResultHolder, get_runtime
+from ._tonio import CancelledError, ResultHolder, get_runtime
 from ._types import Coro
 
 
@@ -40,6 +41,14 @@ def spawn(*coros: Coro):
 
 
 def spawn_blocking(fn: Callable[_Params, _Return], /, *args: _Params.args, **kwargs: _Params.kwargs) -> Coro[_Return]:
-    event, res = get_runtime()._spawn_blocking(fn, *args, **kwargs)
-    yield event.waiter(None)
-    return res.fetch()
+    ctl, event, res = get_runtime()._spawn_blocking(fn, *args, **kwargs)
+    with contextlib.suppress(CancelledError):
+        yield event.waiter(None)
+    err, val = res.fetch()
+    if err is None:
+        ctl.abort()
+        yield event.waiter(None)
+        err, val = res.fetch()
+    if err is True:
+        raise val
+    return val

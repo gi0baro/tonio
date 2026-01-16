@@ -20,11 +20,18 @@ def sleep(timeout: int | float) -> Coro[None]:
 def timeout(coro: Coro[_T], timeout: int | float) -> Coro[tuple[None | _T, bool]]:
     done = Event()
     res = ResultHolder()
+    errs = []
 
     def wrapper():
-        ret = yield coro
-        res.store(ret)
-        done.set()
+        try:
+            ret = yield coro
+            res.store(ret)
+        except CancelledError:
+            pass
+        except Exception as exc:
+            errs.append(exc)
+        finally:
+            done.set()
 
     get_runtime()._spawn_pygen(wrapper())
 
@@ -33,4 +40,7 @@ def timeout(coro: Coro[_T], timeout: int | float) -> Coro[tuple[None | _T, bool]
         with contextlib.suppress(CancelledError):
             coro.throw(CancelledError)
         return None, False
+    if errs:
+        [err] = errs
+        raise err
     return res.fetch(), True
