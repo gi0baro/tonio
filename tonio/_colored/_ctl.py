@@ -1,7 +1,7 @@
 from typing import Any, Awaitable, Callable, ParamSpec, TypeVar
 
-from .._events import Event, Waiter
 from .._tonio import ResultHolder, get_runtime
+from ._events import Event, Waiter
 
 
 _Params = ParamSpec('_Params')

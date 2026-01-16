@@ -1,5 +1,6 @@
 import multiprocessing
 
+from ._colored._events import Event as EventAw
 from ._events import Event
 from ._tonio import ResultHolder, Runtime as _Runtime, set_runtime as _set_runtime
 from ._utils import is_asyncg
@@ -51,7 +52,7 @@ class Runtime(_Runtime):
         return ret
 
     def run_pyasyncgen_until_complete(self, coro):
-        done = Event()
+        done = EventAw()
         res = ResultHolder()
         is_exc = False
 
@@ -67,7 +68,7 @@ class Runtime(_Runtime):
                 done.set()
 
         async def watcher():
-            await done()
+            await done.wait()
             self.stop()
 
         self._spawn_pyasyncgen(watcher())
