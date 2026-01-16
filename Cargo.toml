@@ -1,6 +1,6 @@
 [package]
 name = "tonio"
-version = "0.1.0-alpha4"
+version = "0.1.0-alpha5"
 description = "A multi-threaded async runtime"
 authors = ["Giovanni Barillari <g@baro.dev>"]
 license = "BSD-3-Clause"
