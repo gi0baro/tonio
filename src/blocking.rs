@@ -93,7 +93,7 @@ pub(crate) struct BlockingRunnerPool {
     threads: Arc<atomic::AtomicUsize>,
     tmax: usize,
     idle_timeout: time::Duration,
-    spawning: atomic::AtomicBool,
+    load: Arc<atomic::AtomicIsize>,
 }
 
 impl BlockingRunnerPool {
@@ -102,49 +102,54 @@ impl BlockingRunnerPool {
         Self {
             queue: qtx,
             tq: qrx.clone(),
-            threads: Arc::new(1.into()),
+            threads: Arc::new(0.into()),
             tmax: max_threads,
-            spawning: false.into(),
             idle_timeout: time::Duration::from_secs(idle_timeout),
+            load: Arc::new(0.into()),
         }
     }
 
     #[inline(always)]
     fn spawn_thread(&self) {
-        if self
-            .spawning
-            .compare_exchange(false, true, atomic::Ordering::Release, atomic::Ordering::Relaxed)
-            .is_err()
-        {
+        if self.threads.fetch_add(1, atomic::Ordering::Release) >= self.tmax {
+            self.threads.fetch_sub(1, atomic::Ordering::Release);
             return;
         }
 
-        self.threads.fetch_add(1, atomic::Ordering::Release);
-
         let queue = self.tq.clone();
-        let tcount = self.threads.clone();
         let timeout = self.idle_timeout;
-        thread::spawn(move || {
-            blocking_worker(queue, timeout);
-            tcount.fetch_sub(1, atomic::Ordering::Release);
-        });
-
-        self.spawning.store(false, atomic::Ordering::Release);
+        let load = self.load.clone();
+        let tcount = self.threads.clone();
+        thread::spawn(move || blocking_worker(queue, timeout, load, tcount));
     }
 
     #[inline]
     pub fn run(&self, task: BlockingTask) -> Result<(), channel::SendError<BlockingTask>> {
+        let threads = self.threads.load(atomic::Ordering::Acquire);
         self.queue.send(task)?;
-        if !self.queue.is_empty() && self.threads.load(atomic::Ordering::Acquire) < self.tmax {
+        if self.load.fetch_add(1, atomic::Ordering::Release) >= 0 && threads < self.tmax {
             self.spawn_thread();
         }
         Ok(())
     }
 }
 
-fn blocking_worker(queue: channel::Receiver<BlockingTask>, timeout: time::Duration) {
+fn blocking_worker(
+    queue: channel::Receiver<BlockingTask>,
+    timeout: time::Duration,
+    load: Arc<atomic::AtomicIsize>,
+    tcount: Arc<atomic::AtomicUsize>,
+) {
     Python::attach(|py| {
-        while let Ok(task) = py.detach(|| queue.recv_timeout(timeout)) {
+        while let Ok(task) = py.detach(|| {
+            load.fetch_sub(1, atomic::Ordering::Release);
+            let res = queue.recv_timeout(timeout);
+            load.fetch_add(1, atomic::Ordering::Release);
+            if res.is_err() {
+                tcount.fetch_sub(1, atomic::Ordering::Release);
+            }
+            res
+        }) {
             task.run(py);
         }
     });
