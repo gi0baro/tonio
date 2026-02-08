@@ -10,7 +10,7 @@ use crate::events::{Event, ResultHolder};
 
 #[pyclass(frozen, module = "tonio._tonio")]
 pub(crate) struct BlockingTaskCtl {
-    tid: atomic::AtomicU64,
+    tid: atomic::AtomicUsize,
 }
 
 #[pymethods]
@@ -20,7 +20,7 @@ impl BlockingTaskCtl {
         if tid > 0 {
             let err = CancelledError::type_object(py);
             unsafe {
-                pyo3::ffi::PyThreadState_SetAsyncExc(tid.cast_signed(), err.as_ptr());
+                pyo3::ffi::PyThreadState_SetAsyncExc(tid.cast_signed().try_into().unwrap(), err.as_ptr());
             }
         }
     }
@@ -60,7 +60,7 @@ impl BlockingTask {
         self.ctl
             .get()
             .tid
-            .store(crate::py::thread_ident(py).unwrap(), atomic::Ordering::Release);
+            .store(crate::py::thread_ident(py).unwrap().try_into().unwrap(), atomic::Ordering::Release);
 
         match unsafe {
             let callable = self.target.into_ptr();
