@@ -306,7 +306,7 @@ async def slow_push(target, sleep):
     target.append(True)
 
 @tonio.main
-def main():
+async def main():
     values = []
     async with tonio.scope() as scope:
         scope.spawn(_slow_push(values, 0.1))
@@ -667,7 +667,7 @@ async def consumer(receiver):
             break
 
 @tonio.main
-def main():
+async def main():
     async def close(sender, barrier):
         await barrier.wait()
         sender.close()
