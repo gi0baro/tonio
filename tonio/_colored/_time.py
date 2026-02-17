@@ -2,10 +2,19 @@ import contextlib
 from typing import Awaitable, TypeVar
 
 from .._tonio import CancelledError, ResultHolder, get_runtime
+from .._time import _Interval
 from ._events import Event
 
 
 _T = TypeVar('_T')
+
+
+class Interval(_Interval):
+    __slots__ = []
+
+    def tick(self) -> Awaitable[None]:
+        timeout = self._poll()
+        return Event().waiter(timeout)
 
 
 def sleep(timeout: int | float) -> Awaitable[None]:
@@ -39,3 +48,9 @@ async def timeout(coro: Awaitable[_T], timeout: int | float) -> tuple[None | _T,
         [err] = errs
         raise err
     return res.fetch(), True
+
+
+def interval(period: int | float, at: int | None = None) -> Interval:
+    period = round(max(0, period * 1_000_000))
+    at = at or get_runtime()._clock
+    return Interval(at, period)

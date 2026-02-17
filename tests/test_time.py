@@ -45,3 +45,28 @@ def test_timeout(run):
     assert success1 is True
     assert success2 is False
     assert len(stack) == 1
+
+
+def test_interval(run):
+    stack = []
+    event = tonio.Event()
+
+    def _scheduler(interval):
+        times = 0
+        t0 = tonio.time.time()
+        while times < 5:
+            yield interval.tick()
+            t = tonio.time.time()
+            stack.append((t, (t - t0) / (times or 1)))
+            yield tonio.sleep(0.01)
+            times += 1
+        event.set()
+
+    def _run():
+        interval = tonio.time.interval(0.02)
+        tonio.spawn(_scheduler(interval))
+        yield event.wait()
+
+    run(_run())
+    assert len(stack) == 5
+    assert all(v[1] >= 0.02 for v in stack[1:])
