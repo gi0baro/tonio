@@ -1,1 +1,1 @@
-from ._time import sleep as sleep, time as time, timeout as timeout, interval as interval
+from ._time import interval as interval, sleep as sleep, time as time, timeout as timeout

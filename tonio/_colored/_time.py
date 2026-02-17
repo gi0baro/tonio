@@ -1,8 +1,8 @@
 import contextlib
 from typing import Awaitable, TypeVar
 
-from .._tonio import CancelledError, ResultHolder, get_runtime
 from .._time import _Interval
+from .._tonio import CancelledError, ResultHolder, get_runtime
 from ._events import Event
 
 
