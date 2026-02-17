@@ -16,51 +16,27 @@ use pyo3::prelude::*;
 use crate::{
     blocking::BlockingRunnerPool,
     handles::BoxedHandle,
-    io::Source,
+    io::{ScheduledIO, Source},
     // py::copy_context,
     time::Timer,
 };
+
+type IOHandlesPin<'a> = papaya::HashMapRef<'a, Token, IOHandle, std::hash::RandomState, papaya::LocalGuard<'a>>;
 
 enum IOHandle {
     Py(PyHandleData),
     Signals,
 }
 
-enum PyHandle {
-    Persisted(Py<crate::events::Event>),
-    Once(Py<crate::events::Event>),
-}
-
-impl PyHandle {
-    fn clone_ref(&self, py: Python) -> Self {
-        match self {
-            Self::Persisted(inner) => Self::Persisted(inner.clone_ref(py)),
-            Self::Once(inner) => Self::Once(inner.clone_ref(py)),
-        }
-    }
-
-    fn consume(&self, py: Python) -> (Py<crate::events::Event>, bool) {
-        match self {
-            Self::Persisted(inner) => (inner.clone_ref(py), false),
-            Self::Once(inner) => (inner.clone_ref(py), true),
-        }
-    }
-}
-
 struct PyHandleData {
     interest: Interest,
-    reader: Option<PyHandle>,
-    writer: Option<PyHandle>,
-}
-
-enum IOHandleChange {
-    Register((Source, Token, Interest)),
-    Reregister((Source, Token, Interest)),
-    Deregister(Source),
+    reader: Option<Py<crate::events::Event>>,
+    writer: Option<Py<crate::events::Event>>,
 }
 
 pub struct RuntimeState {
     // buf: Box<[u8]>,
+    io: Poll,
     events: event::Events,
     // pub read_buf: Box<[u8]>,
     // tick_last: u128,
@@ -72,11 +48,9 @@ pub struct RuntimeCBHandlerState {
 
 #[pyclass(frozen, subclass, module = "tonio._tonio")]
 pub struct Runtime {
-    // idle: atomic::AtomicBool,
-    io: Mutex<Poll>,
-    waker: Arc<Waker>,
+    io_ops: Mutex<VecDeque<ScheduledIO>>,
+    waker: arc_swap::ArcSwapOption<Waker>,
     handles_io: papaya::HashMap<Token, IOHandle>,
-    handles_io_changes: Mutex<VecDeque<IOHandleChange>>,
     handles_sched: Mutex<BinaryHeap<Timer>>,
     blocking_pool: BlockingRunnerPool,
     channel_handle_send: channel::Sender<BoxedHandle>,
@@ -100,19 +74,6 @@ pub struct Runtime {
 impl Runtime {
     #[inline]
     fn poll(&self, py: Python, state: &mut RuntimeState) -> std::result::Result<(), std::io::Error> {
-        //: update registry
-        {
-            let io = self.io.lock().unwrap();
-            let mut guard_io = self.handles_io_changes.lock().unwrap();
-            while let Some(op) = guard_io.pop_front() {
-                _ = match op {
-                    IOHandleChange::Register(mut data) => io.registry().register(&mut data.0, data.1, data.2),
-                    IOHandleChange::Reregister(mut data) => io.registry().reregister(&mut data.0, data.1, data.2),
-                    IOHandleChange::Deregister(mut data) => io.registry().deregister(&mut data),
-                };
-            }
-        }
-
         //: get proper poll timeout
         let mut sched_time: Option<u64> = None;
         {
@@ -129,37 +90,36 @@ impl Runtime {
         let poll_result = {
             // self.idle.store(true, atomic::Ordering::Release);
             py.detach(|| {
-                let mut io = self.io.lock().unwrap();
-                let res = io.poll(&mut state.events, sched_time.map(Duration::from_micros));
+                let res = state.io.poll(&mut state.events, sched_time.map(Duration::from_micros));
                 // self.idle.store(false, atomic::Ordering::Release);
                 if let Err(ref err) = res
                     && err.kind() == std::io::ErrorKind::Interrupted
                 {
                     // if we got an interrupt, we retry ready events (as we might need to process signals)
-                    let _ = io.poll(&mut state.events, Some(Duration::from_millis(0)));
+                    let _ = state.io.poll(&mut state.events, Some(Duration::from_millis(0)));
                 }
                 res
             })
         };
 
-        //: handle events + cleanup
-        let io_handles = self.handles_io.pin();
-        let mut deregs = Vec::new();
-        for event in &state.events {
-            if let Some(io_handle) = io_handles.get(&event.token()) {
-                match io_handle {
-                    IOHandle::Py(handle) => self.handle_io_py(py, event, handle, &mut deregs),
-                    IOHandle::Signals => panic!(),
+        //: handle events + registry updates
+        {
+            let io_handles = self.handles_io.pin();
+            let mut handles = Vec::new();
+            for event in &state.events {
+                if let Some(io_handle) = io_handles.get(&event.token()) {
+                    match io_handle {
+                        IOHandle::Py(handle) => self.handle_io_py(py, event, handle, &mut handles),
+                        IOHandle::Signals => panic!(),
+                    }
                 }
             }
-        }
-        drop(io_handles);
-        for (fd, interest) in deregs {
-            match interest {
-                Interest::READABLE => self._reader_rem(py, fd),
-                Interest::WRITABLE => self._writer_rem(py, fd),
-                _ => unreachable!(),
-            };
+            let io_ops = self.io_ops.lock().unwrap();
+            for (token, interest, handle) in handles {
+                self.registry_clean_from_token(py, state, &io_handles, token, interest);
+                _ = self.channel_handle_send.send(handle);
+            }
+            self.registry_update(state, io_ops);
         }
 
         //: timers
@@ -179,6 +139,73 @@ impl Runtime {
         }
 
         poll_result
+    }
+
+    #[inline(always)]
+    fn registry_clean_from_token(
+        &self,
+        py: Python,
+        state: &mut RuntimeState,
+        io_handles: &IOHandlesPin,
+        token: Token,
+        interest: Interest,
+    ) {
+        match io_handles.remove_if(&token, |_, io_handle| {
+            if let IOHandle::Py(data) = io_handle {
+                return data.interest == interest;
+            }
+            false
+        }) {
+            Ok(None) => {}
+            Ok(_) => {
+                #[allow(clippy::cast_possible_wrap)]
+                let mut source = Source::FD(token.0 as i32);
+                _ = state.io.registry().deregister(&mut source);
+            }
+            _ => {
+                io_handles.update(token, |io_handle| {
+                    #[allow(clippy::cast_possible_wrap)]
+                    let mut source = Source::FD(token.0 as i32);
+                    let IOHandle::Py(data) = io_handle else { unreachable!() };
+                    match interest {
+                        Interest::READABLE => {
+                            _ = state.io.registry().reregister(&mut source, token, Interest::WRITABLE);
+                            IOHandle::Py(PyHandleData {
+                                interest: Interest::WRITABLE,
+                                reader: None,
+                                writer: Some(data.writer.as_ref().unwrap().clone_ref(py)),
+                            })
+                        }
+                        Interest::WRITABLE => {
+                            _ = state.io.registry().reregister(&mut source, token, Interest::READABLE);
+                            IOHandle::Py(PyHandleData {
+                                interest: Interest::WRITABLE,
+                                reader: Some(data.reader.as_ref().unwrap().clone_ref(py)),
+                                writer: None,
+                            })
+                        }
+                        _ => unreachable!(),
+                    }
+                });
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn registry_update(&self, state: &mut RuntimeState, mut ops: std::sync::MutexGuard<VecDeque<ScheduledIO>>) {
+        while let Some(op) = ops.pop_front() {
+            #[allow(clippy::cast_possible_wrap)]
+            let mut source = op.source();
+
+            match op {
+                ScheduledIO::Add(token, interest) => {
+                    _ = state.io.registry().register(&mut source, token, interest);
+                }
+                ScheduledIO::Upd(token, interest) => {
+                    _ = state.io.registry().reregister(&mut source, token, interest);
+                }
+            }
+        }
     }
 
     #[inline]
@@ -240,31 +267,23 @@ impl Runtime {
     //     len
     // }
 
-    #[inline]
+    #[inline(always)]
     fn handle_io_py(
         &self,
         py: Python,
         event: &event::Event,
         handle: &PyHandleData,
-        deregs: &mut Vec<(usize, Interest)>,
+        target: &mut Vec<(Token, Interest, BoxedHandle)>,
     ) {
         if let Some(reader) = &handle.reader
-            && event.is_readable()
+            && (event.is_readable() || event.is_read_closed())
         {
-            let (handle, consumed) = reader.consume(py);
-            _ = self.channel_handle_send.send(Box::new(handle));
-            if consumed {
-                deregs.push((event.token().0, Interest::READABLE));
-            }
+            target.push((event.token(), Interest::READABLE, Box::new(reader.clone_ref(py))));
         }
         if let Some(writer) = &handle.writer
-            && event.is_writable()
+            && (event.is_writable() || event.is_write_closed())
         {
-            let (handle, consumed) = writer.consume(py);
-            _ = self.channel_handle_send.send(Box::new(handle));
-            if consumed {
-                deregs.push((event.token().0, Interest::WRITABLE));
-            }
+            target.push((event.token(), Interest::WRITABLE, Box::new(writer.clone_ref(py))));
         }
     }
 
@@ -296,11 +315,7 @@ impl Runtime {
 
     #[inline(always)]
     fn wake(&self) {
-        // if self.idle.load(atomic::Ordering::Acquire) {
-        //     // println!("WAKE UP");
-        //     _ = self.waker.wake();
-        // }
-        _ = self.waker.wake();
+        _ = self.waker.load().as_ref().map(|v| v.wake());
     }
 
     pub fn add_handle(&self, handle: BoxedHandle) {
@@ -325,18 +340,14 @@ impl Runtime {
         threads_blocking: usize,
         threads_blocking_timeout: u64,
         context: bool,
-    ) -> PyResult<Self> {
-        let poll = Poll::new()?;
-        let waker = Waker::new(poll.registry(), Token(0))?;
+    ) -> Self {
         let (channel_handle_send, channel_handle_recv) = channel::unbounded();
         let (channel_sig_send, channel_sig_recv) = channel::bounded(threads);
 
-        Ok(Self {
-            // idle: atomic::AtomicBool::new(false),
-            io: Mutex::new(poll),
-            waker: Arc::new(waker),
+        Self {
+            io_ops: Mutex::new(VecDeque::with_capacity(16)),
+            waker: None.into(),
             handles_io: papaya::HashMap::with_capacity(128),
-            handles_io_changes: Mutex::new(VecDeque::with_capacity(16)),
             handles_sched: Mutex::new(BinaryHeap::with_capacity(32)),
             blocking_pool: BlockingRunnerPool::new(threads_blocking, threads_blocking_timeout),
             channel_handle_send,
@@ -355,7 +366,7 @@ impl Runtime {
             // ssock_w: RwLock::new(py.None()),
             threads_cb: threads,
             use_pyctx: context,
-        })
+        }
     }
 
     #[getter(_clock)]
@@ -510,186 +521,80 @@ impl Runtime {
         Ok((ctl, event, rh))
     }
 
-    #[pyo3(signature = (fd, persisted = true))]
-    fn _reader_add(&self, py: Python, fd: usize, persisted: bool) -> Py<crate::events::Event> {
-        // println!("Runtime.reader_add {}", fd);
+    #[pyo3(signature = (fd))]
+    fn _io_event_r(&self, py: Python, fd: usize) -> PyResult<Py<crate::events::Event>> {
         let token = Token(fd);
-        let event = Py::new(py, crate::events::Event::new()).unwrap();
+        let event = Py::new(py, crate::events::Event::new())?;
 
-        self.handles_io.pin().update_or_insert_with(
-            token,
-            |io_handle| {
-                if let IOHandle::Py(data) = io_handle {
-                    #[allow(clippy::cast_possible_wrap)]
-                    let source = Source::FD(fd as i32);
+        {
+            let handles = self.handles_io.pin();
+            let handle = handles.update_or_insert_with(
+                token,
+                |io_handle| {
+                    let IOHandle::Py(data) = io_handle else { unreachable!() };
                     let interest = data.interest | Interest::READABLE;
-                    let reader = match persisted {
-                        true => PyHandle::Persisted(event.clone_ref(py)),
-                        false => PyHandle::Once(event.clone_ref(py)),
-                    };
-                    let mut guard_io = self.handles_io_changes.lock().unwrap();
-                    guard_io.push_back(IOHandleChange::Reregister((source, token, data.interest)));
-                    return IOHandle::Py(PyHandleData {
+                    IOHandle::Py(PyHandleData {
                         interest,
-                        reader: Some(reader),
-                        writer: Some(data.writer.as_ref().unwrap().clone_ref(py)),
-                    });
-                }
-                unreachable!()
-            },
-            || {
-                #[allow(clippy::cast_possible_wrap)]
-                let source = Source::FD(fd as i32);
-                let interest = Interest::READABLE;
-                let reader = match persisted {
-                    true => PyHandle::Persisted(event.clone_ref(py)),
-                    false => PyHandle::Once(event.clone_ref(py)),
-                };
-                let mut guard_io = self.handles_io_changes.lock().unwrap();
-                guard_io.push_back(IOHandleChange::Register((source, token, interest)));
-                IOHandle::Py(PyHandleData {
-                    interest,
-                    reader: Some(reader),
-                    writer: None,
-                })
-            },
-        );
+                        reader: Some(event.clone_ref(py)),
+                        writer: data.writer.as_ref().map(|v| v.clone_ref(py)),
+                    })
+                },
+                || {
+                    IOHandle::Py(PyHandleData {
+                        interest: Interest::READABLE,
+                        reader: Some(event.clone_ref(py)),
+                        writer: None,
+                    })
+                },
+            );
+            let IOHandle::Py(data) = handle else { unreachable!() };
+            let mut ops = self.io_ops.lock().unwrap();
+            match data.interest {
+                Interest::READABLE => ops.push_back(ScheduledIO::Add(token, Interest::READABLE)),
+                _ => ops.push_back(ScheduledIO::Upd(token, data.interest)),
+            }
+        }
+
         self.wake();
-        event
-        // println!("Runtime.reader_add {} done", fd);
+        Ok(event)
     }
 
-    fn _reader_rem(&self, py: Python, fd: usize) -> bool {
-        // println!("Runtime.reader_rem {}", fd);
+    #[pyo3(signature = (fd))]
+    fn _io_event_w(&self, py: Python, fd: usize) -> PyResult<Py<crate::events::Event>> {
         let token = Token(fd);
+        let event = Py::new(py, crate::events::Event::new())?;
 
-        let ret = match self.handles_io.pin().remove_if(&token, |_, io_handle| {
-            if let IOHandle::Py(data) = io_handle {
-                return data.interest == Interest::READABLE;
-            }
-            false
-        }) {
-            Ok(None) => false,
-            Ok(_) => {
-                #[allow(clippy::cast_possible_wrap)]
-                let source = Source::FD(fd as i32);
-                let mut guard_io = self.handles_io_changes.lock().unwrap();
-                guard_io.push_back(IOHandleChange::Deregister(source));
-                true
-            }
-            _ => {
-                self.handles_io.pin().update(token, |io_handle| {
-                    if let IOHandle::Py(data) = io_handle {
-                        #[allow(clippy::cast_possible_wrap)]
-                        let source = Source::FD(fd as i32);
-                        let interest = Interest::WRITABLE;
-                        let mut guard_io = self.handles_io_changes.lock().unwrap();
-                        guard_io.push_back(IOHandleChange::Reregister((source, token, interest)));
-                        return IOHandle::Py(PyHandleData {
-                            interest,
-                            reader: None,
-                            writer: Some(data.writer.as_ref().unwrap().clone_ref(py)),
-                        });
-                    }
-                    unreachable!()
-                });
-                true
-            }
-        };
-        self.wake();
-        // println!("Runtime.reader_rem {} done", fd);
-        ret
-    }
-
-    #[pyo3(signature = (fd, persisted = true))]
-    fn _writer_add(&self, py: Python, fd: usize, persisted: bool) -> Py<crate::events::Event> {
-        // println!("Runtime.writer_add {}", fd);
-        let token = Token(fd);
-        let event = Py::new(py, crate::events::Event::new()).unwrap();
-
-        self.handles_io.pin().update_or_insert_with(
-            token,
-            |io_handle| {
-                if let IOHandle::Py(data) = io_handle {
-                    #[allow(clippy::cast_possible_wrap)]
-                    let source = Source::FD(fd as i32);
+        {
+            let handles = self.handles_io.pin();
+            let handle = handles.update_or_insert_with(
+                token,
+                |io_handle| {
+                    let IOHandle::Py(data) = io_handle else { unreachable!() };
                     let interest = data.interest | Interest::WRITABLE;
-                    let writer = match persisted {
-                        true => PyHandle::Persisted(event.clone_ref(py)),
-                        false => PyHandle::Once(event.clone_ref(py)),
-                    };
-                    let mut guard_io = self.handles_io_changes.lock().unwrap();
-                    guard_io.push_back(IOHandleChange::Reregister((source, token, data.interest)));
-                    return IOHandle::Py(PyHandleData {
+                    IOHandle::Py(PyHandleData {
                         interest,
-                        reader: Some(data.reader.as_ref().unwrap().clone_ref(py)),
-                        writer: Some(writer),
-                    });
-                }
-                unreachable!()
-            },
-            || {
-                #[allow(clippy::cast_possible_wrap)]
-                let source = Source::FD(fd as i32);
-                let interest = Interest::WRITABLE;
-                let writer = match persisted {
-                    true => PyHandle::Persisted(event.clone_ref(py)),
-                    false => PyHandle::Once(event.clone_ref(py)),
-                };
-                let mut guard_io = self.handles_io_changes.lock().unwrap();
-                guard_io.push_back(IOHandleChange::Register((source, token, interest)));
-                IOHandle::Py(PyHandleData {
-                    interest,
-                    reader: None,
-                    writer: Some(writer),
-                })
-            },
-        );
-        self.wake();
-        event
-        // println!("Runtime.writer_add {} done", fd);
-    }
+                        reader: data.reader.as_ref().map(|v| v.clone_ref(py)),
+                        writer: Some(event.clone_ref(py)),
+                    })
+                },
+                || {
+                    IOHandle::Py(PyHandleData {
+                        interest: Interest::WRITABLE,
+                        reader: None,
+                        writer: Some(event.clone_ref(py)),
+                    })
+                },
+            );
+            let IOHandle::Py(data) = handle else { unreachable!() };
+            let mut ops = self.io_ops.lock().unwrap();
+            match data.interest {
+                Interest::WRITABLE => ops.push_back(ScheduledIO::Add(token, Interest::WRITABLE)),
+                _ => ops.push_back(ScheduledIO::Upd(token, data.interest)),
+            }
+        }
 
-    fn _writer_rem(&self, py: Python, fd: usize) -> bool {
-        // println!("Runtime.writer_rem {}", fd);
-        let token = Token(fd);
-
-        let ret = match self.handles_io.pin().remove_if(&token, |_, io_handle| {
-            if let IOHandle::Py(data) = io_handle {
-                return data.interest == Interest::WRITABLE;
-            }
-            false
-        }) {
-            Ok(None) => false,
-            Ok(_) => {
-                #[allow(clippy::cast_possible_wrap)]
-                let source = Source::FD(fd as i32);
-                let mut guard_io = self.handles_io_changes.lock().unwrap();
-                guard_io.push_back(IOHandleChange::Deregister(source));
-                true
-            }
-            _ => {
-                self.handles_io.pin().update(token, |io_handle| {
-                    if let IOHandle::Py(data) = io_handle {
-                        let interest = Interest::READABLE;
-                        #[allow(clippy::cast_possible_wrap)]
-                        let source = Source::FD(fd as i32);
-                        let mut guard_io = self.handles_io_changes.lock().unwrap();
-                        guard_io.push_back(IOHandleChange::Reregister((source, token, interest)));
-                        return IOHandle::Py(PyHandleData {
-                            interest,
-                            reader: Some(data.reader.as_ref().unwrap().clone_ref(py)),
-                            writer: None,
-                        });
-                    }
-                    unreachable!()
-                });
-                true
-            }
-        };
         self.wake();
-        // println!("Runtime.writer_rem {} done", fd);
-        ret
+        Ok(event)
     }
 
     // fn _sig_add(&self, py: Python, sig: u8, callback: Py<PyAny>, args: Py<PyAny>, context: Py<PyAny>) {
@@ -707,10 +612,15 @@ impl Runtime {
 
     fn _run(pyself: Py<Self>, py: Python) -> PyResult<()> {
         let rself = pyself.get();
+        let poll = Poll::new()?;
+        let waker = Waker::new(poll.registry(), Token(0))?;
         let mut state = RuntimeState {
             // buf: vec![0; 4096].into_boxed_slice(),
+            io: poll,
             events: event::Events::with_capacity(128),
         };
+
+        rself.waker.swap(Some(Arc::new(waker)));
 
         let threads_cb_cvar = Arc::new((Mutex::new(rself.threads_cb), Condvar::new()));
         for _ in 0..rself.threads_cb {
@@ -738,6 +648,7 @@ impl Runtime {
         }
 
         rself.stop_threads(threads_cb_cvar);
+        rself.waker.swap(None);
         // rself.stopping.store(false, atomic::Ordering::Release);
         Ok(())
     }

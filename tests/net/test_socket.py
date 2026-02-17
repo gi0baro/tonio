@@ -12,6 +12,12 @@ def _recv_all(sock: socket.SocketType, nbytes):
     return buf
 
 
+def _send_all(sock: socket.SocketType, buf):
+    while buf:
+        sent = yield sock.send(buf)
+        buf = buf[sent:]
+
+
 def test_socket_accept_recv(run):
     def server():
         sock = socket.socket()
@@ -34,7 +40,7 @@ def test_socket_accept_recv(run):
         sock = socket.socket()
         with sock:
             yield sock.connect(addr)
-            yield sock.send(b'a' * _SIZE)
+            yield _send_all(sock, b'a' * _SIZE)
 
     data = run(server())
     assert data == b'a' * _SIZE
@@ -54,7 +60,7 @@ def test_socket_accept_send(run):
 
             client_sock, _ = yield sock.accept()
             with client_sock:
-                yield client_sock.send(b'a' * _SIZE)
+                yield _send_all(client_sock, b'a' * _SIZE)
 
             yield task
 

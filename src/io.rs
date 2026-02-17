@@ -65,3 +65,19 @@ impl MioSource for Source {
         }
     }
 }
+
+pub(crate) enum ScheduledIO {
+    Add(Token, Interest),
+    Upd(Token, Interest),
+}
+
+impl ScheduledIO {
+    pub fn source(&self) -> Source {
+        match self {
+            #[allow(clippy::cast_possible_wrap)]
+            Self::Add(token, _) => Source::FD(token.0 as i32),
+            #[allow(clippy::cast_possible_wrap)]
+            Self::Upd(token, _) => Source::FD(token.0 as i32),
+        }
+    }
+}
