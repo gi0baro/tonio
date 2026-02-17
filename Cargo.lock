@@ -268,7 +268,7 @@ checksum = "b1dd07eb858a2067e2f3c7155d54e929265c264e6f37efe3ee7a8d1b5a1dd0ba"
 
 [[package]]
 name = "tonio"
-version = "0.1.0-alpha5"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "arc-swap",
