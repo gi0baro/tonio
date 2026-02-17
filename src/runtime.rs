@@ -158,14 +158,12 @@ impl Runtime {
         }) {
             Ok(None) => {}
             Ok(_) => {
-                #[allow(clippy::cast_possible_wrap)]
-                let mut source = Source::FD(token.0 as i32);
+                let mut source = Source::FD(token.0.try_into().unwrap());
                 _ = state.io.registry().deregister(&mut source);
             }
             _ => {
                 io_handles.update(token, |io_handle| {
-                    #[allow(clippy::cast_possible_wrap)]
-                    let mut source = Source::FD(token.0 as i32);
+                    let mut source = Source::FD(token.0.try_into().unwrap());
                     let IOHandle::Py(data) = io_handle else { unreachable!() };
                     match interest {
                         Interest::READABLE => {
@@ -194,7 +192,6 @@ impl Runtime {
     #[inline(always)]
     fn registry_update(&self, state: &mut RuntimeState, mut ops: std::sync::MutexGuard<VecDeque<ScheduledIO>>) {
         while let Some(op) = ops.pop_front() {
-            #[allow(clippy::cast_possible_wrap)]
             let mut source = op.source();
 
             match op {
