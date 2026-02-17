@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import socket as _stdlib_socket
+import sys
 from typing import Any, Awaitable
 
 from ..._net import _socket
@@ -117,6 +118,155 @@ class _Socket(_socket._Socket):
 
         return data
 
+    async def recv_into(self, /, buffer, nbytes: int = 0, flags: int = 0) -> int:
+        try:
+            n = self._sock.recv_into(buffer, nbytes, flags)
+        except (BlockingIOError, InterruptedError):
+            n = -1
+
+        if n >= 0:
+            return n
+
+        runtime = get_runtime()
+        fd = self.fileno()
+        event = runtime._reader_add(fd, False)
+
+        while True:
+            await event.waiter(None)
+            try:
+                ret = self._sock.recv_into(buffer, nbytes, flags)
+            except (BlockingIOError, InterruptedError):
+                event = runtime._reader_add(fd, False)
+                continue
+            except BaseException as exc:
+                raise exc
+            else:
+                break
+
+        return ret
+
+    async def recvfrom(self, bufsize: int, flags: int = 0, /) -> tuple[bytes, Any]:
+        try:
+            ret = self._sock.recvfrom(bufsize, flags)
+        except (BlockingIOError, InterruptedError):
+            ret = None
+
+        if ret is not None:
+            return ret
+
+        runtime = get_runtime()
+        fd = self.fileno()
+        event = runtime._reader_add(fd, False)
+
+        while True:
+            await event.waiter(None)
+            try:
+                ret = self._sock.recvfrom(bufsize, flags)
+            except (BlockingIOError, InterruptedError):
+                event = runtime._reader_add(fd, False)
+                continue
+            except BaseException as exc:
+                raise exc
+            else:
+                break
+
+        return ret
+
+    async def recvfrom_into(self, /, buffer, nbytes: int = 0, flags: int = 0) -> tuple[int, Any]:
+        try:
+            ret = self._sock.recvfrom_into()
+        except (BlockingIOError, InterruptedError):
+            ret = None
+
+        if ret is not None:
+            return ret
+
+        runtime = get_runtime()
+        fd = self.fileno()
+        event = runtime._reader_add(fd, False)
+
+        while True:
+            await event.waiter(None)
+            try:
+                ret = self._sock.recvfrom_into(buffer, nbytes, flags)
+            except (BlockingIOError, InterruptedError):
+                event = runtime._reader_add(fd, False)
+                continue
+            except BaseException as exc:
+                raise exc
+            else:
+                break
+
+        return ret
+
+    if sys.platform != 'win32':
+
+        async def recvmsg(
+            self,
+            bufsize: int,
+            ancbufsize: int = 0,
+            flags: int = 0,
+            /,
+        ) -> tuple[bytes, list[tuple[int, int, bytes]], int, object]:
+            try:
+                ret = self._sock.recvmsg(bufsize, ancbufsize, flags)
+            except (BlockingIOError, InterruptedError):
+                ret = None
+
+            if ret is not None:
+                return ret
+
+            runtime = get_runtime()
+            fd = self.fileno()
+            event = runtime._reader_add(fd, False)
+
+            while True:
+                await event.waiter(None)
+                try:
+                    ret = self._sock.recvmsg(bufsize, ancbufsize, flags)
+                except (BlockingIOError, InterruptedError):
+                    event = runtime._reader_add(fd, False)
+                    continue
+                except BaseException as exc:
+                    raise exc
+                else:
+                    break
+
+            return ret
+
+        async def recvmsg_into(
+            self,
+            buffers,
+            ancbufsize: int = 0,
+            flags: int = 0,
+            /,
+        ) -> tuple[int, list[tuple[int, int, bytes]], int, object]:
+            try:
+                ret = self._sock.recvmsg_into(buffers, ancbufsize, flags)
+            except (BlockingIOError, InterruptedError):
+                ret = None
+
+            if ret is not None:
+                return ret
+
+            runtime = get_runtime()
+            fd = self.fileno()
+            event = runtime._reader_add(fd, False)
+
+            while True:
+                await event.waiter(None)
+                try:
+                    ret = self._sock.recvmsg_into(buffers, ancbufsize, flags)
+                except (BlockingIOError, InterruptedError):
+                    event = runtime._reader_add(fd, False)
+                    continue
+                except BaseException as exc:
+                    raise exc
+                else:
+                    break
+
+            return ret
+
     async def send(self, data: Any, flags: int = 0, /) -> int:
         if not data:
             return 0
@@ -152,6 +302,81 @@ class _Socket(_socket._Socket):
                 break
 
         return sent
+
+    async def sendto(self, data, address) -> int:
+        if not data:
+            return
+
+        address = await self._resolve_address(address, local=False)
+        try:
+            n = self._sock.sendto(data, address)
+        except (BlockingIOError, InterruptedError):
+            n = 0
+
+        if n == len(data):
+            return n
+
+        runtime = get_runtime()
+        fd = self.fileno()
+        event = runtime._writer_add(fd, True)
+        sent = n
+
+        while True:
+            await event.waiter(None)
+            event.clear()
+
+            try:
+                n = self._sock.sendto(data[sent:], address)
+            except (BlockingIOError, InterruptedError):
+                continue
+            except BaseException as exc:
+                runtime._writer_rem(fd)
+                raise exc
+
+            sent += n
+            if sent == len(data):
+                runtime._writer_rem(fd)
+                break
+
+        return sent
+
+    if sys.platform != 'win32':
+
+        async def sendmsg(
+            self,
+            buffers,
+            ancdata: Any = (),
+            flags: int = 0,
+            address: Any = None,
+        ) -> int:
+            if address is not None:
+                address = await self._resolve_address(address, local=False)
+
+            try:
+                n = self._sock.sendmsg(buffers, ancdata, flags, address)
+            except (BlockingIOError, InterruptedError):
+                n = -1
+
+            if n >= 0:
+                return n
+
+            runtime = get_runtime()
+            fd = self.fileno()
+            event = runtime._writer_add(fd, False)
+
+            while True:
+                await event.waiter(None)
+                try:
+                    ret = self._sock.sendmsg(buffers, ancdata, flags, address)
+                except (BlockingIOError, InterruptedError):
+                    event = runtime._writer_add(fd, False)
+                    continue
+                except BaseException as exc:
+                    raise exc
+                else:
+                    break
+
+            return ret
 
 
 def from_stdlib_socket(sock: _stdlib_socket.socket) -> _Socket:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import socket as _stdlib_socket
+import sys
 from types import TracebackType
 from typing import Any
 
@@ -214,11 +215,154 @@ class _Socket(_SocketWrapper):
 
         return data
 
-    # coro def recv_into
-    # coro def recvfrom
-    # coro def recvfrom_into
-    # coro def recvmsg
-    # coro def recvmsg_into
+    def recv_into(self, /, buffer, nbytes: int = 0, flags: int = 0) -> Coro[int]:
+        try:
+            n = self._sock.recv_into(buffer, nbytes, flags)
+        except (BlockingIOError, InterruptedError):
+            n = -1
+
+        if n >= 0:
+            return n
+
+        runtime = get_runtime()
+        fd = self.fileno()
+        event = runtime._reader_add(fd, False)
+
+        while True:
+            yield event.waiter(None)
+            try:
+                ret = self._sock.recv_into(buffer, nbytes, flags)
+            except (BlockingIOError, InterruptedError):
+                event = runtime._reader_add(fd, False)
+                continue
+            except BaseException as exc:
+                raise exc
+            else:
+                break
+
+        return ret
+
+    def recvfrom(self, bufsize: int, flags: int = 0, /) -> Coro[tuple[bytes, Any]]:
+        try:
+            ret = self._sock.recvfrom(bufsize, flags)
+        except (BlockingIOError, InterruptedError):
+            ret = None
+
+        if ret is not None:
+            return ret
+
+        runtime = get_runtime()
+        fd = self.fileno()
+        event = runtime._reader_add(fd, False)
+
+        while True:
+            yield event.waiter(None)
+            try:
+                ret = self._sock.recvfrom(bufsize, flags)
+            except (BlockingIOError, InterruptedError):
+                event = runtime._reader_add(fd, False)
+                continue
+            except BaseException as exc:
+                raise exc
+            else:
+                break
+
+        return ret
+
+    def recvfrom_into(self, /, buffer, nbytes: int = 0, flags: int = 0) -> Coro[tuple[int, Any]]:
+        try:
+            ret = self._sock.recvfrom_into()
+        except (BlockingIOError, InterruptedError):
+            ret = None
+
+        if ret is not None:
+            return ret
+
+        runtime = get_runtime()
+        fd = self.fileno()
+        event = runtime._reader_add(fd, False)
+
+        while True:
+            yield event.waiter(None)
+            try:
+                ret = self._sock.recvfrom_into(buffer, nbytes, flags)
+            except (BlockingIOError, InterruptedError):
+                event = runtime._reader_add(fd, False)
+                continue
+            except BaseException as exc:
+                raise exc
+            else:
+                break
+
+        return ret
+
+    if sys.platform != 'win32':
+
+        def recvmsg(
+            self,
+            bufsize: int,
+            ancbufsize: int = 0,
+            flags: int = 0,
+            /,
+        ) -> Coro[tuple[bytes, list[tuple[int, int, bytes]], int, object]]:
+            try:
+                ret = self._sock.recvmsg(bufsize, ancbufsize, flags)
+            except (BlockingIOError, InterruptedError):
+                ret = None
+
+            if ret is not None:
+                return ret
+
+            runtime = get_runtime()
+            fd = self.fileno()
+            event = runtime._reader_add(fd, False)
+
+            while True:
+                yield event.waiter(None)
+                try:
+                    ret = self._sock.recvmsg(bufsize, ancbufsize, flags)
+                except (BlockingIOError, InterruptedError):
+                    event = runtime._reader_add(fd, False)
+                    continue
+                except BaseException as exc:
+                    raise exc
+                else:
+                    break
+
+            return ret
+
+        def recvmsg_into(
+            self,
+            buffers,
+            ancbufsize: int = 0,
+            flags: int = 0,
+            /,
+        ) -> Coro[tuple[int, list[tuple[int, int, bytes]], int, object]]:
+            try:
+                ret = self._sock.recvmsg_into(buffers, ancbufsize, flags)
+            except (BlockingIOError, InterruptedError):
+                ret = None
+
+            if ret is not None:
+                return ret
+
+            runtime = get_runtime()
+            fd = self.fileno()
+            event = runtime._reader_add(fd, False)
+
+            while True:
+                yield event.waiter(None)
+                try:
+                    ret = self._sock.recvmsg_into(buffers, ancbufsize, flags)
+                except (BlockingIOError, InterruptedError):
+                    event = runtime._reader_add(fd, False)
+                    continue
+                except BaseException as exc:
+                    raise exc
+                else:
+                    break
+
+            return ret
 
     def send(self, data: Any, flags: int = 0, /) -> Coro[int]:
         if not data:
@@ -256,13 +400,84 @@ class _Socket(_SocketWrapper):
 
         return sent
 
-    # coro def sendto
-    # coro def sendmsg
+    def sendto(self, data, address) -> Coro[int]:
+        if not data:
+            return
 
-    # not impl
-    # coro def sendfile
+        address = yield self._resolve_address(address, local=False)
+        try:
+            n = self._sock.sendto(data, address)
+        except (BlockingIOError, InterruptedError):
+            n = 0
 
-    # Intentionally omitted:
+        if n == len(data):
+            return n
+
+        runtime = get_runtime()
+        fd = self.fileno()
+        event = runtime._writer_add(fd, True)
+        sent = n
+
+        while True:
+            yield event.waiter(None)
+            event.clear()
+
+            try:
+                n = self._sock.sendto(data[sent:], address)
+            except (BlockingIOError, InterruptedError):
+                continue
+            except BaseException as exc:
+                runtime._writer_rem(fd)
+                raise exc
+
+            sent += n
+            if sent == len(data):
+                runtime._writer_rem(fd)
+                break
+
+        return sent
+
+    if sys.platform != 'win32':
+
+        def sendmsg(
+            self,
+            buffers,
+            ancdata: Any = (),
+            flags: int = 0,
+            address: Any = None,
+        ) -> Coro[int]:
+            if address is not None:
+                address = yield self._resolve_address(address, local=False)
+
+            try:
+                n = self._sock.sendmsg(buffers, ancdata, flags, address)
+            except (BlockingIOError, InterruptedError):
+                n = -1
+
+            if n >= 0:
+                return n
+
+            runtime = get_runtime()
+            fd = self.fileno()
+            event = runtime._writer_add(fd, False)
+
+            while True:
+                yield event.waiter(None)
+                try:
+                    ret = self._sock.sendmsg(buffers, ancdata, flags, address)
+                except (BlockingIOError, InterruptedError):
+                    event = runtime._writer_add(fd, False)
+                    continue
+                except BaseException as exc:
+                    raise exc
+                else:
+                    break
+
+            return ret
+
+    # not impl:
+    #   coro def sendfile
+    # intentionally omitted:
     #   sendall
     #   makefile
     #   setblocking/getblocking
