@@ -57,10 +57,10 @@ impl BlockingTask {
     }
 
     fn run(self, py: Python) {
-        self.ctl
-            .get()
-            .tid
-            .store(crate::py::thread_ident(py).unwrap().try_into().unwrap(), atomic::Ordering::Release);
+        self.ctl.get().tid.store(
+            crate::py::thread_ident(py).unwrap().try_into().unwrap(),
+            atomic::Ordering::Release,
+        );
 
         match unsafe {
             let callable = self.target.into_ptr();

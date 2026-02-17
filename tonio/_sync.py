@@ -1,5 +1,4 @@
 import contextlib
-from types import TracebackType
 from typing import Any
 
 from ._tonio import (
@@ -18,42 +17,30 @@ from ._tonio import (
 from ._types import Coro
 
 
-class Lock(_Lock):
+class _LockImpl(_Lock):
+    def or_raise(self) -> _LockCtx:
+        self.try_acquire()
+        return _LockCtx(self)
+
+
+class Lock(_LockImpl):
     def __call__(self) -> Coro[contextlib.AbstractContextManager[None]]:
         if event := self.acquire():
             yield event.waiter(None)
         return _LockCtx(self)
 
-    async def __aenter__(self):
-        if event := self.acquire():
-            await event.waiter(None)
 
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_value: BaseException | None,
-        traceback: TracebackType | None,
-    ):
-        self.release()
+class _SemaphoreImpl(_Semaphore):
+    def or_raise(self) -> _SemaphoreCtx:
+        self.try_acquire()
+        return _SemaphoreCtx(self)
 
 
-class Semaphore(_Semaphore):
+class Semaphore(_SemaphoreImpl):
     def __call__(self) -> Coro[contextlib.AbstractContextManager[None]]:
         if event := self.acquire():
             yield event.waiter(None)
         return _SemaphoreCtx(self)
-
-    async def __aenter__(self):
-        if event := self.acquire():
-            await event.waiter(None)
-
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_value: BaseException | None,
-        traceback: TracebackType | None,
-    ):
-        self.release()
 
 
 class Barrier(_Barrier):

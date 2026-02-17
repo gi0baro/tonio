@@ -36,6 +36,17 @@ impl Lock {
         None
     }
 
+    fn try_acquire(&self) -> PyResult<()> {
+        if self
+            .state
+            .compare_exchange(false, true, atomic::Ordering::Release, atomic::Ordering::Relaxed)
+            .is_err()
+        {
+            return Err(crate::errors::WouldBlock::new_err("Cannot acquire lock"));
+        }
+        Ok(())
+    }
+
     fn release(&self, py: Python) {
         let mut events = self.waiters.lock().unwrap();
         if let Some(event) = events.pop_front() {
@@ -74,6 +85,17 @@ impl Semaphore {
         None
     }
 
+    fn try_acquire(&self) -> PyResult<()> {
+        let mut state = self.state.lock().unwrap();
+        #[allow(clippy::cast_possible_wrap)]
+        let value = state.0 as i32 - state.1.len() as i32;
+        if value <= 0 {
+            return Err(crate::errors::WouldBlock::new_err("Cannot acquire semaphore"));
+        }
+        state.0 -= 1;
+        Ok(())
+    }
+
     fn release(&self, py: Python) {
         let mut state = self.state.lock().unwrap();
         if let Some(event) = state.1.pop_front() {
@@ -81,6 +103,11 @@ impl Semaphore {
             return;
         }
         state.0 += 1;
+    }
+
+    fn tokens(&self) -> usize {
+        let state = self.state.lock().unwrap();
+        state.0
     }
 }
 
@@ -109,6 +136,10 @@ impl Barrier {
             self._event.get().set(py);
         }
         count
+    }
+
+    fn value(&self) -> usize {
+        self.count.load(atomic::Ordering::Acquire)
     }
 }
 

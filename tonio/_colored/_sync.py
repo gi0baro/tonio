@@ -1,3 +1,6 @@
+from types import TracebackType
+
+from .._sync import _LockImpl, _SemaphoreImpl
 from .._tonio import (
     Barrier as _Barrier,
     Channel as _Channel,
@@ -7,6 +10,34 @@ from .._tonio import (
     UnboundedChannelReceiver as _UnboundedChannelReceiver,
     UnboundedChannelSender as UnboundedChannelSender,
 )
+
+
+class Lock(_LockImpl):
+    async def __aenter__(self):
+        if event := self.acquire():
+            await event.waiter(None)
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ):
+        self.release()
+
+
+class Semaphore(_SemaphoreImpl):
+    async def __aenter__(self):
+        if event := self.acquire():
+            await event.waiter(None)
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ):
+        self.release()
 
 
 class Barrier(_Barrier):
