@@ -7,8 +7,8 @@ def main(
     *coros,
     context: bool = False,
     threads: int | None = None,
-    threads_blocking: int = 128,
-    threads_blocking_timeout: int = 30,
+    blocking_threadpool: int = 128,
+    blocking_threadpool_idle_ttl: int = 30,
 ):
     if not coros:
         #: opts
@@ -19,8 +19,8 @@ def main(
                     coro(),
                     context=context,
                     threads=threads,
-                    threads_blocking=threads_blocking,
-                    threads_blocking_timeout=threads_blocking_timeout,
+                    blocking_threadpool=blocking_threadpool,
+                    blocking_threadpool_idle_ttl=blocking_threadpool_idle_ttl,
                 )
 
             return wrapper

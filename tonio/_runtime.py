@@ -88,14 +88,14 @@ def run(
     coro,
     context: bool = False,
     threads: int | None = None,
-    threads_blocking: int = 128,
-    threads_blocking_timeout: int = 30,
+    blocking_threadpool_size: int = 128,
+    blocking_threadpool_idle_ttl: int = 30,
 ):
     threads = threads or multiprocessing.cpu_count()
     runtime = Runtime(
         threads=threads,
-        threads_blocking=threads_blocking,
-        threads_blocking_timeout=threads_blocking_timeout,
+        threads_blocking=blocking_threadpool_size,
+        threads_blocking_timeout=blocking_threadpool_idle_ttl,
         context=context,
     )
     _set_runtime(runtime)
