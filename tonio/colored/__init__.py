@@ -2,5 +2,5 @@ from .._colored._ctl import spawn as spawn, spawn_blocking as spawn_blocking, yi
 from .._colored._events import Event as Event, Waiter as Waiter
 from .._colored._scope import scope as scope
 from .._deco import main as main
-from .._runtime import Runtime as Runtime, run as run
+from .._runtime import Runtime as Runtime, new as runtime, run as run  # noqa: F401
 from .time import sleep as sleep

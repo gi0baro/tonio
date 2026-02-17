@@ -80,8 +80,29 @@ class Runtime(_Runtime):
             raise ret
         return ret
 
+    def run_until_complete(self, coro):
+        runner = self.run_pyasyncgen_until_complete if is_asyncg(coro) else self.run_pygen_until_complete
+        return runner(coro)
+
     def stop(self):
         self._stopping = True
+
+
+def new(
+    context: bool = False,
+    threads: int | None = None,
+    blocking_threadpool_size: int = 128,
+    blocking_threadpool_idle_ttl: int = 30,
+) -> Runtime:
+    threads = threads or multiprocessing.cpu_count()
+    runtime = Runtime(
+        threads=threads,
+        threads_blocking=blocking_threadpool_size,
+        threads_blocking_timeout=blocking_threadpool_idle_ttl,
+        context=context,
+    )
+    _set_runtime(runtime)
+    return runtime
 
 
 def run(
@@ -91,13 +112,10 @@ def run(
     blocking_threadpool_size: int = 128,
     blocking_threadpool_idle_ttl: int = 30,
 ):
-    threads = threads or multiprocessing.cpu_count()
-    runtime = Runtime(
-        threads=threads,
-        threads_blocking=blocking_threadpool_size,
-        threads_blocking_timeout=blocking_threadpool_idle_ttl,
+    runtime = new(
         context=context,
+        threads=threads,
+        blocking_threadpool_size=blocking_threadpool_size,
+        blocking_threadpool_idle_ttl=blocking_threadpool_idle_ttl,
     )
-    _set_runtime(runtime)
-    runner = runtime.run_pyasyncgen_until_complete if is_asyncg(coro) else runtime.run_pygen_until_complete
-    return runner(coro)
+    return runtime.run_until_complete(coro)

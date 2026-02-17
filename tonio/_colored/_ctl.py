@@ -1,10 +1,11 @@
 import contextlib
-from typing import Any, Awaitable, Callable, ParamSpec, TypeVar
+from typing import Any, Awaitable, Callable, Iterable, ParamSpec, TypeVar
 
 from .._tonio import CancelledError, ResultHolder, get_runtime
 from ._events import Event, Waiter
 
 
+_T = TypeVar('_T')
 _Params = ParamSpec('_Params')
 _Return = TypeVar('_Return')
 
@@ -62,6 +63,14 @@ async def spawn_blocking(fn: Callable[_Params, _Return], /, *args: _Params.args,
     if err is True:
         raise val
     return val
+
+
+def map(fn: Callable[[_T], _Return], /, xs: Iterable[_T]) -> Awaitable[list[_Return]]:
+    return spawn(*[fn(x) for x in xs])
+
+
+def map_blocking(fn: Callable[[_T], _Return], /, xs: Iterable[_T]) -> Awaitable[list[_Return]]:
+    return spawn(*[spawn_blocking(fn, x) for x in xs])
 
 
 async def yield_now():
