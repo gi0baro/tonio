@@ -394,6 +394,63 @@ When you `yield` on the scope, it will wait for all the spawned coroutines to en
 
 #### Scheduling work
 
+TonIO provides the `time.interval` function to create interval objects you can yield on a scheduled basis:
+
+<table><tr><td>
+
+`yield` syntax
+
+```python
+import tonio
+from tonio import time
+
+def some_task():
+    ...
+
+def scheduler():
+    interval = time.interval(1)
+    while True:
+        yield interval.tick()
+        tonio.spawn(some_task())
+
+@tonio.main
+def main():
+    tonio.spawn(scheduler())
+    # do some other work
+```
+</td><td>
+
+`await` syntax
+
+```python
+import tonio.colored as tonio
+from tonio.colored import time
+
+async def some_task():
+    ...
+
+async def scheduler():
+    interval = time.interval(1)
+    while True:
+        await interval.tick()
+        tonio.spawn(some_task())
+
+@tonio.main
+async def main():
+    tonio.spawn(scheduler())
+    # do some other work
+```
+</td></tr></table>
+
+The `interval` method first argument is the interval in seconds resolution, and the method also accepts an optional `at` argument, to delay the first execution at a specific time (from the runtime's clock perspective):
+
+```python
+from tonio import time
+
+# tick every 500ms, with the first tick happening in 5 seconds from now
+interval = time.interval(0.5, time.time() + 5)
+```
+
 ### Synchronization primitives
 
 Synchronization primitives are exposed in the `tonio.sync` module.
