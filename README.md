@@ -1,8 +1,8 @@
 # TonIO
 
-TonIO is a multi-threaded async runtime for free-threaded Python, built in Rust on top of the [mio crate](https://github.com/tokio-rs/mio), and inspired by [tinyio](https://github.com/patrick-kidger/tinyio) and [trio](https://github.com/python-trio/trio).
+TonIO is a multi-threaded async runtime for free-threaded Python, built in Rust on top of the [mio crate](https://github.com/tokio-rs/mio), and inspired by [tinyio](https://github.com/patrick-kidger/tinyio), [trio](https://github.com/python-trio/trio) and [tokio](https://github.com/tokio-rs/tokio).
 
-> **Warning**: TonIO is currently a work in progress and very pre-alpha state. The API is subtle to breaking changes.
+> **Warning**: TonIO is currently a work in progress and in alpha state. The APIs are subtle to breaking changes.
 
 > **Note:** TonIO is available on free-threaded Python and Unix systems only.
 
@@ -124,9 +124,30 @@ main()
 
 > **Note:** as you can see the `colored` module provides the additional `yield_now` coroutine, a quick way to define a suspension point, given you cannot just `yield` as in the non-colored notation.
 
+> **Note:** both `run` and `main` can only be called once per program. To run the runtime multiple times in the same program, follow the section below.
+
+#### Manually managing the runtime
+
+TonIO also provides the `runtime` function, to manually manage the runtime lifecycle:
+
+```python
+import tonio
+
+def _run1():
+    ...
+
+async def _run2():
+    ...
+
+def main():
+    runtime = tonio.runtime()
+    runtime.run_until_complete(_run1())
+    runtime.run_until_complete(_run2())
+```
+
 #### Runtime options
 
-Both `run` and `main` accept options, specifically:
+The `run`, `main` and `runtime` methods accept options, specifically:
 
 | option name | description | default |
 | --- | --- | --- |
@@ -268,6 +289,46 @@ async def main():
 ```
 </td></tr></table>
 
+#### Map utilities
+
+TonIO provides the `map` and `map_blocking` utilities to spawn the same operation with an iterable of parameters:
+
+<table><tr><td>
+
+`yield` syntax
+
+```python
+import tonio
+
+accum = []
+
+def task(no):
+    yield tonio.sleep(0.5)
+    accum.append(no * 2)
+
+@tonio.main
+def main():
+    yield tonio.map(task, range(4))
+```
+</td><td>
+
+`await` syntax
+
+```python
+import tonio.colored as tonio
+
+accum = []
+
+async def task(no):
+    await tonio.sleep(0.5)
+    accum.append(no * 2)
+
+@tonio.main
+async def main():
+    await tonio.map(task, range(4))
+```
+</td></tr></table>
+
 ### Scopes and cancellations
 
 TonIO provides a `scope` context, that lets you cancel work spawned within it:
@@ -323,13 +384,15 @@ When you `yield` on the scope, it will wait for all the spawned coroutines to en
 
 ### Time-related functions
 
-- `tonio.time.time()`: a function returning the runtime's clock
+- `tonio.time.time()`: a function returning the runtime's clock (in seconds, microsecond resolution)
 - `tonio.time.sleep(delay)`: a coroutine you can yield on to sleep (delay is in seconds)
 - `tonio.time.timeout(coro, timeout)`: a coroutine you can yield on returning a tuple `(output, success)`. If the coroutine succeeds in the given time then the pair `(output, True)` is returned. Otherwise this will return `(None, False)`.
 
 > **Note**: `time.sleep` is also exported to the main `tonio` module.
 
 > **Note**: all of the above functions are also present in `tonio.colored.time` module.
+
+#### Scheduling work
 
 ### Synchronization primitives
 
@@ -393,6 +456,18 @@ async def main():
 ```
 </td></tr></table>
 
+The `Lock` object also implements an `or_raise` method, that will immediately fail when the lock cannot be acquired:
+
+```python
+from tonio.exceptions import WouldBlock
+
+try:
+    with lock.or_raise():
+        ...
+except WouldBlock:
+    ...
+```
+
 #### Semaphore
 
 A semaphore for coroutines:
@@ -410,16 +485,16 @@ def main():
     # counter can't go above 2
     counter = 0
 
-    def _count(lock):
+    def _count(semaphore):
         nonlocal counter
-        with (yield lock()):
+        with (yield semaphore()):
             counter += 1
             yield
             counter -= 1
     
-    lock = sync.Semaphore(2)
+    semaphore = sync.Semaphore(2)
     yield tonio.spawn(*[
-        _count(lock)
+        _count(semaphore)
         for _ in range(10)
     ])
 ```
@@ -436,20 +511,34 @@ async def main():
     # counter can't go above 2
     counter = 0
 
-    async def _count(lock):
+    async def _count(semaphore):
         nonlocal counter
-        async with lock():
+        async with semaphore():
             counter += 1
             await tonio.yield_now()
             counter -= 1
     
-    lock = sync.Semaphore(2)
+    semaphore = sync.Semaphore(2)
     await tonio.spawn(*[
-        _count(lock)
+        _count(semaphore)
         for _ in range(10)
     ])
 ```
 </td></tr></table>
+
+As for locks, the `Semaphore` object also implements an `or_raise` method, that will immediately fail when the lock cannot be acquired:
+
+```python
+from tonio.exceptions import WouldBlock
+
+try:
+    with semaphore.or_raise():
+        ...
+except WouldBlock:
+    ...
+```
+
+The `Semaphore` object also implements a `tokens` method, that returns the number of available tokens.
 
 #### Barrier
 
@@ -506,6 +595,8 @@ async def main():
     ])
 ```
 </td></tr></table>
+
+The `Barrier` object also implements a `value` method, which returns the current value of the barrier.
 
 #### Channels
 
