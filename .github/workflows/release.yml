@@ -6,7 +6,7 @@ on:
       - v*.*.*
 
 env:
-  PY_ALL: 3.14t
+  PY_ALL: 3.13t 3.14t
 
 jobs:
   sdist:
