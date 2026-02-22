@@ -25,6 +25,7 @@ type IOHandlesPin<'a> = papaya::HashMapRef<'a, Token, IOHandle, std::hash::Rando
 
 enum IOHandle {
     Py(PyHandleData),
+    #[allow(dead_code)]
     Signals,
 }
 

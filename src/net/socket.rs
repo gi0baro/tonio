@@ -7,6 +7,7 @@ use pyo3::prelude::*;
 
 #[pyclass(frozen, subclass, module = "tonio._tonio")]
 pub(crate) struct Socket {
+    #[allow(dead_code)]
     fd: usize,
     #[pyo3(get)]
     _sock: Py<PyAny>,
