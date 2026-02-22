@@ -1,0 +1,56 @@
+import argparse
+import socket as _stdsock
+
+import tonio.colored as tonio
+import tonio.colored.net.socket as socket
+
+
+async def _send_all(sock, buf):
+    while buf:
+        sent = await sock.send(buf)
+        buf = buf[sent:]
+
+
+async def echo_server(address):
+    sock = socket.socket()
+    with sock:
+        await sock.bind(address)
+        sock.listen()
+
+        while True:
+            client, _ = await sock.accept()
+            tonio.spawn(echo_client(client))
+
+
+async def echo_client(conn):
+    try:
+        conn.setsockopt(_stdsock.IPPROTO_TCP, _stdsock.TCP_NODELAY, 1)
+    except (OSError, NameError):
+        pass
+
+    with conn:
+        while True:
+            data = await conn.recv(102400)
+            if not data:
+                break
+            await _send_all(conn, data)
+
+
+def main(addr, threads, context):
+    addr = args.addr.split(':')
+    addr[1] = int(addr[1])
+    addr = tuple(addr)
+
+    try:
+        tonio.run(echo_server(addr), context=context, threads=threads)
+    except:
+        pass
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--addr', default='127.0.0.1:25000', type=str)
+    parser.add_argument('--threads', default=1, type=int, help='no of threads')
+    parser.add_argument('--context', default=False, type=bool, help='use context')
+    args = parser.parse_args()
+    main(**dict(parser.parse_args()._get_kwargs()))
