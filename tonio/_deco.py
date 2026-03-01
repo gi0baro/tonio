@@ -6,6 +6,7 @@ from ._runtime import run
 def main(
     *coros,
     context: bool = False,
+    signals: list[int] | None = None,
     threads: int | None = None,
     blocking_threadpool_size: int = 128,
     blocking_threadpool_idle_ttl: int = 30,
@@ -18,6 +19,7 @@ def main(
                 run(
                     coro(),
                     context=context,
+                    signals=signals,
                     threads=threads,
                     blocking_threadpool_size=blocking_threadpool_size,
                     blocking_threadpool_idle_ttl=blocking_threadpool_idle_ttl,

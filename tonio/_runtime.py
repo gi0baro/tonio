@@ -1,7 +1,9 @@
 import multiprocessing
+import socket
 
 from ._colored._events import Event as EventAw
 from ._events import Event
+from ._signals import _set_sig_wfd, _sig_add, _sig_rem
 from ._tonio import ResultHolder, Runtime as _Runtime, set_runtime as _set_runtime
 from ._utils import is_asyncg
 
@@ -15,12 +17,54 @@ class Runtime(_Runtime):
             self._run_forever_post()
 
     def _run_forever_pre(self):
-        # TODO: signals
-        pass
+        self._ssock_start()
+        self._sig_reg()
 
     def _run_forever_post(self):
-        # TODO: signals
+        self._sig_dereg()
+        self._ssock_stop()
         self._stopping = False
+
+    def _ssock_start(self):
+        if self._ssock_w is not None:
+            raise RuntimeError('self-socket has been already setup')
+
+        self._ssock_r, self._ssock_w = socket.socketpair()
+        try:
+            self._ssock_r.setblocking(False)
+            self._ssock_w.setblocking(False)
+        except Exception:
+            self._ssock_w = None
+            self._ssock_r = None
+            raise
+
+    def _ssock_stop(self):
+        if not self._ssock_w:
+            raise RuntimeError('self-socket has not been setup')
+
+        self._ssock_w = None
+        self._ssock_r = None
+
+    def _sig_reg(self):
+        try:
+            fd = self._ssock_w.fileno()
+            self._sig_wfd = _set_sig_wfd(fd)
+            for sig in self._sigset:
+                _sig_add(sig)
+        except Exception:
+            raise
+
+        self._sig_listening = True
+
+    def _sig_dereg(self):
+        self._sig_listening = False
+
+        for sig in self._sigset:
+            try:
+                _sig_rem(sig)
+            except Exception:
+                pass
+        _set_sig_wfd(self._sig_wfd)
 
     def run_pygen_until_complete(self, coro):
         done = Event()
@@ -90,6 +134,7 @@ class Runtime(_Runtime):
 
 def new(
     context: bool = False,
+    signals: list[int] | None = None,
     threads: int | None = None,
     blocking_threadpool_size: int = 128,
     blocking_threadpool_idle_ttl: int = 30,
@@ -100,6 +145,7 @@ def new(
         threads_blocking=blocking_threadpool_size,
         threads_blocking_timeout=blocking_threadpool_idle_ttl,
         context=context,
+        signals=signals or [],
     )
     _set_runtime(runtime)
     return runtime
@@ -108,12 +154,14 @@ def new(
 def run(
     coro,
     context: bool = False,
+    signals: list[int] | None = None,
     threads: int | None = None,
     blocking_threadpool_size: int = 128,
     blocking_threadpool_idle_ttl: int = 30,
 ):
     runtime = new(
         context=context,
+        signals=signals,
         threads=threads,
         blocking_threadpool_size=blocking_threadpool_size,
         blocking_threadpool_idle_ttl=blocking_threadpool_idle_ttl,

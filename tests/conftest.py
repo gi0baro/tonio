@@ -11,8 +11,8 @@ from tonio._runtime import Runtime
 from tonio._utils import is_asyncg
 
 
-_runtime = Runtime(threads=4, threads_blocking=8, threads_blocking_timeout=10, context=False)
-_runtime_wctx = Runtime(threads=4, threads_blocking=8, threads_blocking_timeout=10, context=True)
+_runtime = Runtime(threads=4, threads_blocking=8, threads_blocking_timeout=10, context=False, signals=[])
+_runtime_wctx = Runtime(threads=4, threads_blocking=8, threads_blocking_timeout=10, context=True, signals=[])
 
 
 @pytest.fixture(scope='function')
