@@ -7,7 +7,7 @@ def main(
     *coros,
     context: bool = False,
     threads: int | None = None,
-    blocking_threadpool: int = 128,
+    blocking_threadpool_size: int = 128,
     blocking_threadpool_idle_ttl: int = 30,
 ):
     if not coros:
@@ -19,7 +19,7 @@ def main(
                     coro(),
                     context=context,
                     threads=threads,
-                    blocking_threadpool=blocking_threadpool,
+                    blocking_threadpool_size=blocking_threadpool_size,
                     blocking_threadpool_idle_ttl=blocking_threadpool_idle_ttl,
                 )
 
