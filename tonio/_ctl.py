@@ -11,19 +11,31 @@ _Params = ParamSpec('_Params')
 _Return = TypeVar('_Return')
 
 
-def spawn(*coros: Coro):
+def spawn(*coros: Coro, fetch_results: bool = True):
     barrier = Barrier(len(coros) + 1)
-    res = ResultHolder(len(coros))
     errs = []
 
-    def wrapper(idx, coro, barrier):
-        try:
-            ret = yield coro
-            res.store(ret, idx)
-        except Exception as exc:
-            errs.append(exc)
-        finally:
-            barrier.ack()
+    if fetch_results:
+        res = ResultHolder(len(coros))
+
+        def wrapper(idx, coro, barrier):
+            try:
+                ret = yield coro
+                res.store(ret, idx)
+            except Exception as exc:
+                errs.append(exc)
+            finally:
+                barrier.ack()
+    else:
+        res = None
+
+        def wrapper(idx, coro, barrier):
+            try:
+                yield coro
+            except Exception as exc:
+                errs.append(exc)
+            finally:
+                barrier.ack()
 
     for idx, coro in enumerate(coros):
         get_runtime()._spawn_pygen(wrapper(idx, coro, barrier))
@@ -32,7 +44,7 @@ def spawn(*coros: Coro):
         yield barrier.wait()
         if errs:
             raise ExceptionGroup('SpawnExceptionGroup', errs)
-        return res.fetch()
+        return res.fetch() if fetch_results else res
 
     return join()
 

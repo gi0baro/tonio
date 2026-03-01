@@ -14,7 +14,7 @@ async def _run():
     t0 = time.monotonic()
     tasks = [_task() for _ in range(1_000_000)]
     t1 = time.monotonic()
-    await tonio.spawn(*tasks)
+    await tonio.spawn(*tasks, fetch_results=False)
     t2 = time.monotonic()
     return (t1 - t0, t2 - t1, t2 - t0)
 

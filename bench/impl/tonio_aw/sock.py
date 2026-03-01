@@ -19,7 +19,7 @@ async def echo_server(address):
 
         while True:
             client, _ = await sock.accept()
-            tonio.spawn(echo_client(client))
+            tonio.spawn(echo_client(client), fetch_results=False)
 
 
 async def echo_client(conn):
@@ -43,7 +43,7 @@ def main(addr, threads, context):
 
     try:
         tonio.run(echo_server(addr), context=context, threads=threads)
-    except:
+    except Exception:
         pass
 
 

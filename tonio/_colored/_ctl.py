@@ -26,22 +26,34 @@ class AsyncSpawnJoin:
         await self._barrier.wait()
         if self._errs:
             raise ExceptionGroup('SpawnExceptionGroup', self._errs)
-        return self._res.fetch()
+        return self._res.fetch() if self._res else None
 
 
-def spawn(*coros) -> Awaitable[Any]:
+def spawn(*coros, fetch_results: bool = True) -> Awaitable[Any]:
     barrier = Barrier(len(coros) + 1)
-    res = ResultHolder(len(coros))
     errs = []
 
-    async def wrapper(idx, coro, barrier):
-        try:
-            ret = await coro
-            res.store(ret, idx)
-        except Exception as exc:
-            errs.append(exc)
-        finally:
-            barrier.ack()
+    if fetch_results:
+        res = ResultHolder(len(coros))
+
+        async def wrapper(idx, coro, barrier):
+            try:
+                ret = await coro
+                res.store(ret, idx)
+            except Exception as exc:
+                errs.append(exc)
+            finally:
+                barrier.ack()
+    else:
+        res = None
+
+        async def wrapper(idx, coro, barrier):
+            try:
+                await coro
+            except Exception as exc:
+                errs.append(exc)
+            finally:
+                barrier.ack()
 
     for idx, coro in enumerate(coros):
         get_runtime()._spawn_pyasyncgen(wrapper(idx, coro, barrier))
