@@ -2,7 +2,8 @@ import contextlib
 from typing import Any, Awaitable, Callable, Iterable, ParamSpec, TypeVar
 
 from .._tonio import CancelledError, ResultHolder, get_runtime
-from ._events import Event, Waiter
+from ._events import Event
+from ._sync import Barrier
 
 
 _T = TypeVar('_T')
@@ -11,10 +12,10 @@ _Return = TypeVar('_Return')
 
 
 class AsyncSpawnJoin:
-    __slots__ = ['_waiter', '_res', '_errs']
+    __slots__ = ['_barrier', '_res', '_errs']
 
-    def __init__(self, waiter, res, errs):
-        self._waiter = waiter
+    def __init__(self, barrier, res, errs):
+        self._barrier = barrier
         self._res = res
         self._errs = errs
 
@@ -22,33 +23,30 @@ class AsyncSpawnJoin:
         return self._wait().__await__()
 
     async def _wait(self):
-        await self._waiter
+        await self._barrier.wait()
         if self._errs:
             raise ExceptionGroup('SpawnExceptionGroup', self._errs)
         return self._res.fetch()
 
 
 def spawn(*coros) -> Awaitable[Any]:
-    events = []
+    barrier = Barrier(len(coros) + 1)
     res = ResultHolder(len(coros))
     errs = []
 
-    async def wrapper(idx, coro, event):
+    async def wrapper(idx, coro, barrier):
         try:
             ret = await coro
             res.store(ret, idx)
         except Exception as exc:
             errs.append(exc)
         finally:
-            event.set()
+            barrier.ack()
 
     for idx, coro in enumerate(coros):
-        event = Event()
-        events.append(event)
-        get_runtime()._spawn_pyasyncgen(wrapper(idx, coro, event))
+        get_runtime()._spawn_pyasyncgen(wrapper(idx, coro, barrier))
 
-    waiter = Waiter(*events)
-    return AsyncSpawnJoin(waiter, res, errs)
+    return AsyncSpawnJoin(barrier, res, errs)
 
 
 async def spawn_blocking(fn: Callable[_Params, _Return], /, *args: _Params.args, **kwargs: _Params.kwargs) -> _Return:

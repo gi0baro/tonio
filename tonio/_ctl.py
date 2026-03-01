@@ -1,7 +1,7 @@
 import contextlib
 from typing import Callable, Iterable, ParamSpec, TypeVar
 
-from ._events import Event, Waiter
+from ._sync import Barrier
 from ._tonio import CancelledError, ResultHolder, get_runtime
 from ._types import Coro
 
@@ -12,28 +12,24 @@ _Return = TypeVar('_Return')
 
 
 def spawn(*coros: Coro):
-    events = []
+    barrier = Barrier(len(coros) + 1)
     res = ResultHolder(len(coros))
     errs = []
 
-    def wrapper(idx, coro, event):
+    def wrapper(idx, coro, barrier):
         try:
             ret = yield coro
             res.store(ret, idx)
         except Exception as exc:
             errs.append(exc)
         finally:
-            event.set()
+            barrier.ack()
 
     for idx, coro in enumerate(coros):
-        event = Event()
-        events.append(event)
-        get_runtime()._spawn_pygen(wrapper(idx, coro, event))
-
-    waiter = Waiter(*events)
+        get_runtime()._spawn_pygen(wrapper(idx, coro, barrier))
 
     def join():
-        yield waiter
+        yield barrier.wait()
         if errs:
             raise ExceptionGroup('SpawnExceptionGroup', errs)
         return res.fetch()
