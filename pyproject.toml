@@ -81,6 +81,7 @@ extend-ignore = [
     'E501', # leave line length to black
     'N818', # leave to us exceptions naming
     'S101', # assert is fine
+    'S110',
 ]
 flake8-quotes = { inline-quotes = 'single', multiline-quotes = 'double' }
 mccabe = { max-complexity = 25 }
