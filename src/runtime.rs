@@ -36,7 +36,6 @@ struct PyHandleData {
 pub struct RuntimeState {
     buf: Box<[u8]>,
     io: Poll,
-    handles: Vec<(Token, Interest, BoxedHandle)>,
     sig_sock: (socket2::Socket, socket2::Socket),
 }
 
@@ -71,7 +70,7 @@ pub struct Runtime {
 }
 
 impl Runtime {
-    #[inline]
+    #[inline(always)]
     fn poll(
         &self,
         py: Python,
@@ -110,18 +109,12 @@ impl Runtime {
             for event in events.iter() {
                 if let Some(io_handle) = io_handles.get(&event.token()) {
                     match io_handle {
-                        IOHandle::Py(handle) => self.handle_io_py(py, event, handle, state),
+                        IOHandle::Py(handle) => self.handle_io_py(py, event, handle, state.io.registry(), &io_handles),
                         IOHandle::Signals => self.handle_io_signals(py, state),
                     }
                 }
             }
             let io_ops = self.io_ops.lock().unwrap();
-            state.handles.reverse();
-            for _ in 0..state.handles.len() {
-                let (token, interest, handle) = state.handles.pop().unwrap();
-                self.registry_clean_from_token(py, state.io.registry(), &io_handles, token, interest);
-                _ = self.channel_handle_send.send(handle);
-            }
             self.registry_update(state, io_ops);
         }
 
@@ -144,7 +137,7 @@ impl Runtime {
         poll_result
     }
 
-    #[inline(always)]
+    #[inline]
     fn registry_clean_from_token(
         &self,
         py: Python,
@@ -266,20 +259,25 @@ impl Runtime {
     }
 
     #[inline(always)]
-    fn handle_io_py(&self, py: Python, event: &event::Event, handle: &PyHandleData, state: &mut RuntimeState) {
+    fn handle_io_py(
+        &self,
+        py: Python,
+        event: &event::Event,
+        handle: &PyHandleData,
+        registry: &mio::Registry,
+        io_handles: &IOHandlesPin,
+    ) {
         if let Some(reader) = &handle.reader
             && (event.is_readable() || event.is_read_closed())
         {
-            state
-                .handles
-                .push((event.token(), Interest::READABLE, Box::new(reader.clone_ref(py))));
+            self.registry_clean_from_token(py, registry, io_handles, event.token(), Interest::READABLE);
+            _ = self.channel_handle_send.send(Box::new(reader.clone_ref(py)));
         }
         if let Some(writer) = &handle.writer
             && (event.is_writable() || event.is_write_closed())
         {
-            state
-                .handles
-                .push((event.token(), Interest::WRITABLE, Box::new(writer.clone_ref(py))));
+            self.registry_clean_from_token(py, registry, io_handles, event.token(), Interest::WRITABLE);
+            _ = self.channel_handle_send.send(Box::new(writer.clone_ref(py)));
         }
     }
 
@@ -621,7 +619,6 @@ impl Runtime {
         let mut state = RuntimeState {
             buf: vec![0; 4096].into_boxed_slice(),
             io: poll,
-            handles: Vec::with_capacity(128),
             sig_sock,
         };
 

@@ -37,6 +37,7 @@ impl PyGenHandle {
         }
     }
 
+    #[inline]
     fn call(&self, py: Python, runtime: Py<Runtime>) {
         unsafe {
             let mut ret = std::ptr::null_mut::<pyo3::ffi::PyObject>();
@@ -138,6 +139,7 @@ impl PyGenCtxHandle {
         }
     }
 
+    #[inline]
     fn call(&self, py: Python, runtime: Py<Runtime>) {
         unsafe {
             let mut ret = std::ptr::null_mut::<pyo3::ffi::PyObject>();
@@ -241,6 +243,7 @@ impl PyAsyncGenHandle {
         }
     }
 
+    #[inline]
     fn call(&self, py: Python, runtime: Py<Runtime>) {
         unsafe {
             let mut ret = std::ptr::null_mut::<pyo3::ffi::PyObject>();
@@ -338,6 +341,7 @@ impl PyAsyncGenCtxHandle {
         }
     }
 
+    #[inline]
     fn call(&self, py: Python, runtime: Py<Runtime>) {
         unsafe {
             let mut ret = std::ptr::null_mut::<pyo3::ffi::PyObject>();

@@ -18,6 +18,7 @@ pub(crate) struct Event {
 }
 
 impl Event {
+    #[inline]
     fn notify(&self, py: Python) {
         let mut guard = self.watchers.lock().unwrap();
         while let Some(waker) = guard.pop_front() {
@@ -32,6 +33,7 @@ impl Event {
         }
     }
 
+    #[inline]
     fn add_waker(&self, py: Python, waker: Waker) {
         let mut guard = self.watchers.lock().unwrap();
         if self.flag.load(atomic::Ordering::Acquire) {
@@ -83,6 +85,7 @@ impl Event {
 }
 
 impl Handle for Py<Event> {
+    #[inline]
     fn run(&self, py: Python, _runtime: Py<Runtime>, _state: &mut crate::runtime::RuntimeCBHandlerState) {
         self.get().set(py);
     }
