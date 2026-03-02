@@ -38,8 +38,15 @@ papaya = "=0.2"
 pyo3 = { version = "=0.28", features = ["anyhow", "extension-module", "generate-import-lib"] }
 socket2 = { version = "=0.6", features = ["all"] }
 
+mimalloc = { version = "0.1.43", default-features = false, features = ["local_dynamic_tls", "v3"], optional = true }
+tikv-jemallocator = { version = "0.6.0", default-features = false, features = ["disable_initial_exec_tls"], optional = true }
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.159"
+
+[features]
+jemalloc = ["dep:tikv-jemallocator"]
+mimalloc = ["dep:mimalloc"]
 
 [profile.release]
 codegen-units = 1
