@@ -152,6 +152,7 @@ The `run`, `main` and `runtime` methods accept options, specifically:
 | option name | description | default |
 | --- | --- | --- |
 | `context` | enable `contextvars` usage in coroutines | `False` |
+| `signals` | list of signals to listen to | |
 | `threads` | Number of runtime threads | # of CPU cores |
 | `blocking_threadpool_size` | Maximum number of blocking threads | 128 |
 | `blocking_threadpool_idle_ttl` | Idle timeout for blocking threads (in seconds) | 30 |
@@ -902,6 +903,69 @@ async def client():
     with sock:
         await sock.connect(('127.0.0.1', 8000))
         await sock.send("message")
+```
+</td></tr></table>
+
+### Signals
+
+TonIO provides a context manager to catch signals.
+
+The usage of such context manager requires to first configure the runtime to listen for such signals:
+
+<table><tr><td>
+
+`yield` syntax
+
+```python
+import signal
+import tonio
+from tonio.time import interval
+
+def sig_handle():
+    with tonio.signal_receiver(
+        signal.SIGHUP, 
+        signal.SIGUSR1
+    ) as sigs:
+        for ev in sigs:
+            sig = yield ev
+            if sig == signal.SIGHUP:
+                ...
+
+@tonio.main(
+    signals=[signal.SIGHUP, signal.SIGUSR1]
+)
+def main():
+    tonio.spawn(sig_handle())
+    ticker = interval(1)
+    while True:
+        yield ticker.tick()
+```
+</td><td>
+
+`await` syntax
+
+```python
+import signal
+import tonio.colored as tonio
+from tonio.colored.time import interval
+
+async def sig_handle():
+    with tonio.signal_receiver(
+        signal.SIGHUP, 
+        signal.SIGUSR1
+    ) as sigs:
+        async for sig in sigs:
+            if sig == signal.SIGHUP:
+                ...
+
+@tonio.main(
+    signals=[signal.SIGHUP, signal.SIGUSR1]
+)
+async def main():
+    tonio.spawn(sig_handle())
+    ticker = interval(1)
+    while True:
+        await ticker.tick()
 ```
 </td></tr></table>
 
