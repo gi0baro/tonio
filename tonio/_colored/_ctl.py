@@ -37,7 +37,7 @@ class _SpawnJoin:
         self._errs = errs
 
     def __await__(self):
-        self._wait().__await__()
+        return self._wait().__await__()
 
     async def _wait(self):
         await self._barrier.wait()
