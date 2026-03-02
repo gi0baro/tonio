@@ -1,5 +1,5 @@
 use std::{
-    collections::{BinaryHeap, VecDeque},
+    collections::{BinaryHeap, HashMap, VecDeque},
     io::Read,
     os::fd::FromRawFd,
     sync::{Arc, Condvar, Mutex, atomic},
@@ -15,12 +15,12 @@ use pyo3::prelude::*;
 use crate::{
     blocking::BlockingRunnerPool,
     handles::BoxedHandle,
-    io::{ScheduledIO, Source},
+    io::Source,
     // py::copy_context,
     time::Timer,
 };
 
-type IOHandlesPin<'a> = papaya::HashMapRef<'a, Token, IOHandle, std::hash::RandomState, papaya::LocalGuard<'a>>;
+type IOPyOp = (Token, Interest, Py<crate::events::Event>);
 
 enum IOHandle {
     Py(PyHandleData),
@@ -36,6 +36,7 @@ struct PyHandleData {
 pub struct RuntimeState {
     buf: Box<[u8]>,
     io: Poll,
+    handles: HashMap<Token, IOHandle>,
     sig_sock: (socket2::Socket, socket2::Socket),
 }
 
@@ -45,9 +46,8 @@ pub struct RuntimeCBHandlerState {
 
 #[pyclass(frozen, subclass, module = "tonio._tonio")]
 pub struct Runtime {
-    io_ops: Mutex<VecDeque<ScheduledIO>>,
+    io_ops: Mutex<VecDeque<IOPyOp>>,
     waker: arc_swap::ArcSwapOption<Waker>,
-    handles_io: papaya::HashMap<Token, IOHandle>,
     handles_sched: Mutex<BinaryHeap<Timer>>,
     blocking_pool: BlockingRunnerPool,
     channel_handle_send: channel::Sender<BoxedHandle>,
@@ -103,22 +103,17 @@ impl Runtime {
             })
         };
 
-        //: handle events + registry updates
-        {
-            let io_handles = self.handles_io.pin();
-            for event in events.iter() {
-                if let Some(io_handle) = io_handles.get(&event.token()) {
-                    match io_handle {
-                        IOHandle::Py(handle) => self.handle_io_py(py, event, handle, state.io.registry(), &io_handles),
-                        IOHandle::Signals => self.handle_io_signals(py, state),
-                    }
+        //: handle events
+        for event in events.iter() {
+            if let Some(io_handle) = state.handles.remove(&event.token()) {
+                match io_handle {
+                    IOHandle::Py(handle) => self.handle_io_py(py, event, handle, state.io.registry()),
+                    IOHandle::Signals => self.handle_io_signals(py, event, state),
                 }
             }
-            let io_ops = self.io_ops.lock().unwrap();
-            self.registry_update(state, io_ops);
         }
 
-        //: timers
+        //: handle timers
         {
             let mut guard_sched = self.handles_sched.lock().unwrap();
             if let Some(timer) = guard_sched.peek() {
@@ -134,67 +129,54 @@ impl Runtime {
             }
         }
 
+        //: update registry from ops
+        {
+            let io_ops = self.io_ops.lock().unwrap();
+            Self::registry_update(state, io_ops);
+        }
+
         poll_result
     }
 
-    #[inline]
-    fn registry_clean_from_token(
-        &self,
-        py: Python,
-        registry: &mio::Registry,
-        io_handles: &IOHandlesPin,
-        token: Token,
-        interest: Interest,
-    ) {
-        match io_handles.remove_if(&token, |_, io_handle| {
-            let IOHandle::Py(data) = io_handle else { unreachable!() };
-            data.interest == interest
-        }) {
-            Ok(None) => {}
-            Ok(_) => {
-                let mut source = Source::FD(token.0.try_into().unwrap());
-                _ = registry.deregister(&mut source);
-            }
-            _ => {
-                io_handles.update(token, |io_handle| {
-                    let mut source = Source::FD(token.0.try_into().unwrap());
-                    let IOHandle::Py(data) = io_handle else { unreachable!() };
-                    match interest {
-                        Interest::READABLE => {
-                            _ = registry.reregister(&mut source, token, Interest::WRITABLE);
-                            IOHandle::Py(PyHandleData {
-                                interest: Interest::WRITABLE,
-                                reader: None,
-                                writer: Some(data.writer.as_ref().unwrap().clone_ref(py)),
-                            })
-                        }
-                        Interest::WRITABLE => {
-                            _ = registry.reregister(&mut source, token, Interest::READABLE);
-                            IOHandle::Py(PyHandleData {
-                                interest: Interest::WRITABLE,
-                                reader: Some(data.reader.as_ref().unwrap().clone_ref(py)),
-                                writer: None,
-                            })
-                        }
-                        _ => unreachable!(),
-                    }
-                });
-            }
-        }
+    #[inline(always)]
+    fn registry_clean_from_token(registry: &mio::Registry, token: Token, interest: Option<Interest>) {
+        let mut source = Source::FD(token.0.try_into().unwrap());
+        _ = match interest {
+            Some(interest) => registry.reregister(&mut source, token, interest),
+            None => registry.deregister(&mut source),
+        };
     }
 
     #[inline(always)]
-    fn registry_update(&self, state: &mut RuntimeState, mut ops: std::sync::MutexGuard<VecDeque<ScheduledIO>>) {
-        while let Some(op) = ops.pop_front() {
-            let mut source = op.source();
-
-            match op {
-                ScheduledIO::Add(token, interest) => {
-                    _ = state.io.registry().register(&mut source, token, interest);
+    fn registry_update(state: &mut RuntimeState, mut ops: std::sync::MutexGuard<VecDeque<IOPyOp>>) {
+        while let Some((token, interest, event)) = ops.pop_front() {
+            if let Some(io_handle) = state.handles.get_mut(&token) {
+                let IOHandle::Py(data) = io_handle else { unreachable!() };
+                data.interest |= interest;
+                match interest {
+                    Interest::READABLE => data.reader = Some(event),
+                    Interest::WRITABLE => data.writer = Some(event),
+                    _ => unreachable!(),
                 }
-                ScheduledIO::Upd(token, interest) => {
-                    _ = state.io.registry().reregister(&mut source, token, interest);
-                }
+                let mut source = Source::FD(token.0.try_into().unwrap());
+                _ = state.io.registry().reregister(&mut source, token, data.interest);
+            } else {
+                let io_handle = match interest {
+                    Interest::READABLE => IOHandle::Py(PyHandleData {
+                        interest,
+                        reader: Some(event),
+                        writer: None,
+                    }),
+                    Interest::WRITABLE => IOHandle::Py(PyHandleData {
+                        interest,
+                        reader: None,
+                        writer: Some(event),
+                    }),
+                    _ => unreachable!(),
+                };
+                state.handles.insert(token, io_handle);
+                let mut source = Source::FD(token.0.try_into().unwrap());
+                _ = state.io.registry().register(&mut source, token, interest);
             }
         }
     }
@@ -259,30 +241,39 @@ impl Runtime {
     }
 
     #[inline(always)]
-    fn handle_io_py(
-        &self,
-        py: Python,
-        event: &event::Event,
-        handle: &PyHandleData,
-        registry: &mio::Registry,
-        io_handles: &IOHandlesPin,
-    ) {
+    fn new_interest_from_py_r(prev: &PyHandleData) -> Option<Interest> {
+        if prev.interest == Interest::READABLE {
+            return None;
+        }
+        Some(Interest::WRITABLE)
+    }
+
+    #[inline(always)]
+    fn new_interest_from_py_w(prev: &PyHandleData) -> Option<Interest> {
+        if prev.interest == Interest::WRITABLE {
+            return None;
+        }
+        Some(Interest::READABLE)
+    }
+
+    #[inline(always)]
+    fn handle_io_py(&self, py: Python, event: &event::Event, handle: PyHandleData, registry: &mio::Registry) {
         if let Some(reader) = &handle.reader
             && (event.is_readable() || event.is_read_closed())
         {
-            self.registry_clean_from_token(py, registry, io_handles, event.token(), Interest::READABLE);
+            Self::registry_clean_from_token(registry, event.token(), Self::new_interest_from_py_r(&handle));
             _ = self.channel_handle_send.send(Box::new(reader.clone_ref(py)));
         }
         if let Some(writer) = &handle.writer
             && (event.is_writable() || event.is_write_closed())
         {
-            self.registry_clean_from_token(py, registry, io_handles, event.token(), Interest::WRITABLE);
+            Self::registry_clean_from_token(registry, event.token(), Self::new_interest_from_py_w(&handle));
             _ = self.channel_handle_send.send(Box::new(writer.clone_ref(py)));
         }
     }
 
     #[inline(always)]
-    fn handle_io_signals(&self, py: Python, state: &mut RuntimeState) {
+    fn handle_io_signals(&self, py: Python, event: &event::Event, state: &mut RuntimeState) {
         let sock = &mut state.sig_sock.0;
         let read = self.read_from_sock(sock, &mut state.buf);
         if read > 0 && self.sig_listening.load(atomic::Ordering::Relaxed) {
@@ -293,12 +284,14 @@ impl Runtime {
                 }
             }
         }
+        state.handles.insert(event.token(), IOHandle::Signals);
     }
 
     fn init_sig_socket(
         &self,
         py: Python,
         registry: &mio::Registry,
+        handles: &mut HashMap<Token, IOHandle>,
     ) -> anyhow::Result<(socket2::Socket, socket2::Socket)> {
         let fdr: usize = self
             .ssock_r
@@ -323,20 +316,20 @@ impl Runtime {
         let mut source = Source::FD(fdr.try_into()?);
         let interest = Interest::READABLE;
 
+        handles.insert(token, IOHandle::Signals);
         registry.register(&mut source, token, interest)?;
-        self.handles_io.pin().insert(token, IOHandle::Signals);
 
         Ok(socks)
     }
 
-    fn drop_sig_socket(&self, py: Python, state: RuntimeState) -> anyhow::Result<()> {
+    fn drop_sig_socket(&self, py: Python, mut state: RuntimeState) -> anyhow::Result<()> {
         let fd: usize = self
             .ssock_r
             .load()
             .call_method0(py, pyo3::intern!(py, "fileno"))?
             .extract(py)?;
         let token = Token(fd);
-        if let Some(IOHandle::Signals) = self.handles_io.pin().remove(&token) {
+        if let Some(IOHandle::Signals) = state.handles.remove(&token) {
             #[allow(clippy::cast_possible_wrap)]
             let mut source = Source::FD(fd as i32);
             state.io.registry().deregister(&mut source)?;
@@ -385,7 +378,6 @@ impl Runtime {
         Self {
             io_ops: Mutex::new(VecDeque::with_capacity(16)),
             waker: None.into(),
-            handles_io: papaya::HashMap::with_capacity(128),
             handles_sched: Mutex::new(BinaryHeap::with_capacity(32)),
             blocking_pool: BlockingRunnerPool::new(threads_blocking, threads_blocking_timeout),
             channel_handle_send,
@@ -528,34 +520,9 @@ impl Runtime {
     fn _io_event_r(&self, py: Python, fd: usize) -> PyResult<Py<crate::events::Event>> {
         let token = Token(fd);
         let event = Py::new(py, crate::events::Event::new())?;
-
         {
-            let handles = self.handles_io.pin();
-            let handle = handles.update_or_insert_with(
-                token,
-                |io_handle| {
-                    let IOHandle::Py(data) = io_handle else { unreachable!() };
-                    let interest = data.interest | Interest::READABLE;
-                    IOHandle::Py(PyHandleData {
-                        interest,
-                        reader: Some(event.clone_ref(py)),
-                        writer: data.writer.as_ref().map(|v| v.clone_ref(py)),
-                    })
-                },
-                || {
-                    IOHandle::Py(PyHandleData {
-                        interest: Interest::READABLE,
-                        reader: Some(event.clone_ref(py)),
-                        writer: None,
-                    })
-                },
-            );
-            let IOHandle::Py(data) = handle else { unreachable!() };
             let mut ops = self.io_ops.lock().unwrap();
-            match data.interest {
-                Interest::READABLE => ops.push_back(ScheduledIO::Add(token, Interest::READABLE)),
-                _ => ops.push_back(ScheduledIO::Upd(token, data.interest)),
-            }
+            ops.push_back((token, Interest::READABLE, event.clone_ref(py)));
         }
 
         self.wake();
@@ -566,34 +533,9 @@ impl Runtime {
     fn _io_event_w(&self, py: Python, fd: usize) -> PyResult<Py<crate::events::Event>> {
         let token = Token(fd);
         let event = Py::new(py, crate::events::Event::new())?;
-
         {
-            let handles = self.handles_io.pin();
-            let handle = handles.update_or_insert_with(
-                token,
-                |io_handle| {
-                    let IOHandle::Py(data) = io_handle else { unreachable!() };
-                    let interest = data.interest | Interest::WRITABLE;
-                    IOHandle::Py(PyHandleData {
-                        interest,
-                        reader: data.reader.as_ref().map(|v| v.clone_ref(py)),
-                        writer: Some(event.clone_ref(py)),
-                    })
-                },
-                || {
-                    IOHandle::Py(PyHandleData {
-                        interest: Interest::WRITABLE,
-                        reader: None,
-                        writer: Some(event.clone_ref(py)),
-                    })
-                },
-            );
-            let IOHandle::Py(data) = handle else { unreachable!() };
             let mut ops = self.io_ops.lock().unwrap();
-            match data.interest {
-                Interest::WRITABLE => ops.push_back(ScheduledIO::Add(token, Interest::WRITABLE)),
-                _ => ops.push_back(ScheduledIO::Upd(token, data.interest)),
-            }
+            ops.push_back((token, Interest::WRITABLE, event.clone_ref(py)));
         }
 
         self.wake();
@@ -612,13 +554,15 @@ impl Runtime {
 
     fn _run(pyself: Py<Self>, py: Python) -> PyResult<()> {
         let rself = pyself.get();
+        let mut handles = HashMap::with_capacity(128);
         let poll = Poll::new()?;
         let waker = Waker::new(poll.registry(), Token(0))?;
-        let sig_sock = rself.init_sig_socket(py, poll.registry())?;
+        let sig_sock = rself.init_sig_socket(py, poll.registry(), &mut handles)?;
         let mut events = event::Events::with_capacity(128);
         let mut state = RuntimeState {
             buf: vec![0; 4096].into_boxed_slice(),
             io: poll,
+            handles,
             sig_sock,
         };
 
@@ -630,7 +574,7 @@ impl Runtime {
             let chan_handle = rself.channel_handle_recv.clone();
             let chan_sig = rself.channel_sig_recv.clone();
             let cvar = threads_cb_cvar.clone();
-            thread::spawn(|| Runtime::handle_cb_loop(runtime, chan_handle, chan_sig, cvar));
+            thread::spawn(|| Self::handle_cb_loop(runtime, chan_handle, chan_sig, cvar));
         }
 
         loop {

@@ -66,17 +66,3 @@ impl MioSource for Source {
         }
     }
 }
-
-pub(crate) enum ScheduledIO {
-    Add(Token, Interest),
-    Upd(Token, Interest),
-}
-
-impl ScheduledIO {
-    pub fn source(&self) -> Source {
-        match self {
-            Self::Add(token, _) => Source::FD(token.0.try_into().unwrap()),
-            Self::Upd(token, _) => Source::FD(token.0.try_into().unwrap()),
-        }
-    }
-}
