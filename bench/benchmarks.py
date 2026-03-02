@@ -185,7 +185,12 @@ def run():
         'net_sock': net_sock,
         'concurrency': concurrency,
     }
+
     inp_benchmarks = sys.argv[1:] or ['1m']
+    if 'all' in inp_benchmarks:
+        inp_benchmarks.remove('all')
+        inp_benchmarks.extend(list(all_benchmarks.keys()))
+
     run_benchmarks = set(inp_benchmarks) & set(all_benchmarks.keys())
 
     now = datetime.datetime.utcnow()

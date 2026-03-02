@@ -13,14 +13,5 @@ VIRTUAL_ENV=$(pwd)/bench/.venv uv pip install numpy trio tinyio
 
 cd ./bench
 
-# base bench
-BENCHMARK_EXC_PREFIX=$(pwd)/.venv/bin ./.venv/bin/python benchmarks.py 1m
-mv ./results/data.json ./results/1m.json
-
-# net bench
-BENCHMARK_EXC_PREFIX=$(pwd)/.venv/bin ./.venv/bin/python benchmarks.py net_sock
-mv ./results/data.json ./results/net.json
-
-# concurrency
-BENCHMARK_EXC_PREFIX=$(pwd)/.venv/bin ./.venv/bin/python benchmarks.py concurrency
-mv ./results/data.json ./results/concurrency.json
+BENCHMARK_EXC_PREFIX=$(pwd)/.venv/bin ./.venv/bin/python benchmarks.py all
+mv ./results/data.json ./results/all.json
