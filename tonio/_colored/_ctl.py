@@ -11,7 +11,7 @@ _Params = ParamSpec('_Params')
 _Return = TypeVar('_Return')
 
 
-class AsyncSpawnJoin:
+class _SpawnJoinCollect:
     __slots__ = ['_barrier', '_res', '_errs']
 
     def __init__(self, barrier, res, errs):
@@ -26,15 +26,33 @@ class AsyncSpawnJoin:
         await self._barrier.wait()
         if self._errs:
             raise ExceptionGroup('SpawnExceptionGroup', self._errs)
-        return self._res.fetch() if self._res else None
+        return self._res.fetch()
 
 
-def spawn(*coros, fetch_results: bool = True) -> Awaitable[Any]:
-    barrier = Barrier(len(coros) + 1)
-    errs = []
+class _SpawnJoin:
+    __slots__ = ['_barrier', '_errs']
 
-    if fetch_results:
+    def __init__(self, barrier, errs):
+        self._barrier = barrier
+        self._errs = errs
+
+    def __await__(self):
+        self._wait().__await__()
+
+    async def _wait(self):
+        await self._barrier.wait()
+        if self._errs:
+            raise ExceptionGroup('SpawnExceptionGroup', self._errs)
+
+
+class _Spawn:
+    __slots__ = []
+
+    @staticmethod
+    def __call__(*coros) -> Awaitable[Any]:
+        barrier = Barrier(len(coros) + 1)
         res = ResultHolder(len(coros))
+        errs = []
 
         async def wrapper(idx, coro, barrier):
             try:
@@ -44,10 +62,18 @@ def spawn(*coros, fetch_results: bool = True) -> Awaitable[Any]:
                 errs.append(exc)
             finally:
                 barrier.ack()
-    else:
-        res = None
 
-        async def wrapper(idx, coro, barrier):
+        for idx, coro in enumerate(coros):
+            get_runtime()._spawn_pyasyncgen(wrapper(idx, coro, barrier))
+
+        return _SpawnJoinCollect(barrier, res, errs)
+
+    @staticmethod
+    def without_results(*coros) -> Awaitable[None]:
+        barrier = Barrier(len(coros) + 1)
+        errs = []
+
+        async def wrapper(coro, barrier):
             try:
                 await coro
             except Exception as exc:
@@ -55,10 +81,18 @@ def spawn(*coros, fetch_results: bool = True) -> Awaitable[Any]:
             finally:
                 barrier.ack()
 
-    for idx, coro in enumerate(coros):
-        get_runtime()._spawn_pyasyncgen(wrapper(idx, coro, barrier))
+        for coro in coros:
+            get_runtime()._spawn_pyasyncgen(wrapper(coro, barrier))
 
-    return AsyncSpawnJoin(barrier, res, errs)
+        return _SpawnJoin(barrier, errs)
+
+    @staticmethod
+    def without_tracking(*coros):
+        for coro in coros:
+            get_runtime()._spawn_pyasyncgen(coro)
+
+
+spawn = _Spawn()
 
 
 async def spawn_blocking(fn: Callable[_Params, _Return], /, *args: _Params.args, **kwargs: _Params.kwargs) -> _Return:
@@ -83,7 +117,7 @@ def map_blocking(fn: Callable[[_T], _Return], /, xs: Iterable[_T]) -> Awaitable[
     return spawn(*[spawn_blocking(fn, x) for x in xs])
 
 
-async def yield_now():
+def yield_now() -> Awaitable[None]:
     event = Event()
     event.set()
-    await event.waiter(None)
+    return event.waiter(None)

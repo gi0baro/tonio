@@ -19,7 +19,7 @@ def echo_server(address):
 
         while True:
             client, _ = yield sock.accept()
-            tonio.spawn(echo_client(client), fetch_results=False)
+            tonio.spawn.without_tracking(echo_client(client))
 
 
 def echo_client(conn):

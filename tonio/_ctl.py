@@ -1,5 +1,5 @@
 import contextlib
-from typing import Callable, Iterable, ParamSpec, TypeVar
+from typing import Any, Callable, Iterable, ParamSpec, TypeVar
 
 from ._sync import Barrier
 from ._tonio import CancelledError, ResultHolder, get_runtime
@@ -11,12 +11,14 @@ _Params = ParamSpec('_Params')
 _Return = TypeVar('_Return')
 
 
-def spawn(*coros: Coro, fetch_results: bool = True):
-    barrier = Barrier(len(coros) + 1)
-    errs = []
+class _Spawn:
+    __slots__ = []
 
-    if fetch_results:
+    @staticmethod
+    def __call__(*coros: Coro) -> Coro[Any]:
+        barrier = Barrier(len(coros) + 1)
         res = ResultHolder(len(coros))
+        errs = []
 
         def wrapper(idx, coro, barrier):
             try:
@@ -26,10 +28,24 @@ def spawn(*coros: Coro, fetch_results: bool = True):
                 errs.append(exc)
             finally:
                 barrier.ack()
-    else:
-        res = None
 
-        def wrapper(idx, coro, barrier):
+        for idx, coro in enumerate(coros):
+            get_runtime()._spawn_pygen(wrapper(idx, coro, barrier))
+
+        def join():
+            yield barrier.wait()
+            if errs:
+                raise ExceptionGroup('SpawnExceptionGroup', errs)
+            return res.fetch()
+
+        return join()
+
+    @staticmethod
+    def without_results(*coros: Coro) -> Coro[None]:
+        barrier = Barrier(len(coros) + 1)
+        errs = []
+
+        def wrapper(coro, barrier):
             try:
                 yield coro
             except Exception as exc:
@@ -37,16 +53,23 @@ def spawn(*coros: Coro, fetch_results: bool = True):
             finally:
                 barrier.ack()
 
-    for idx, coro in enumerate(coros):
-        get_runtime()._spawn_pygen(wrapper(idx, coro, barrier))
+        for coro in coros:
+            get_runtime()._spawn_pygen(wrapper(coro, barrier))
 
-    def join():
-        yield barrier.wait()
-        if errs:
-            raise ExceptionGroup('SpawnExceptionGroup', errs)
-        return res.fetch() if fetch_results else res
+        def join():
+            yield barrier.wait()
+            if errs:
+                raise ExceptionGroup('SpawnExceptionGroup', errs)
 
-    return join()
+        return join()
+
+    @staticmethod
+    def without_tracking(*coros: Coro):
+        for coro in coros:
+            get_runtime()._spawn_pygen(coro)
+
+
+spawn = _Spawn()
 
 
 def spawn_blocking(fn: Callable[_Params, _Return], /, *args: _Params.args, **kwargs: _Params.kwargs) -> Coro[_Return]:
