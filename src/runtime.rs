@@ -1,7 +1,6 @@
 use std::{
     collections::{BinaryHeap, VecDeque},
     io::Read,
-    // mem,
     os::fd::FromRawFd,
     sync::{Arc, Condvar, Mutex, atomic},
     thread,
@@ -37,7 +36,7 @@ struct PyHandleData {
 pub struct RuntimeState {
     buf: Box<[u8]>,
     io: Poll,
-    handles: VecDeque<(Token, Interest, BoxedHandle)>,
+    handles: Vec<(Token, Interest, BoxedHandle)>,
     sig_sock: (socket2::Socket, socket2::Socket),
 }
 
@@ -117,8 +116,10 @@ impl Runtime {
                 }
             }
             let io_ops = self.io_ops.lock().unwrap();
-            while let Some((token, interest, handle)) = state.handles.pop_front() {
-                self.registry_clean_from_token(py, state, &io_handles, token, interest);
+            state.handles.reverse();
+            for _ in 0..state.handles.len() {
+                let (token, interest, handle) = state.handles.pop().unwrap();
+                self.registry_clean_from_token(py, state.io.registry(), &io_handles, token, interest);
                 _ = self.channel_handle_send.send(handle);
             }
             self.registry_update(state, io_ops);
@@ -147,7 +148,7 @@ impl Runtime {
     fn registry_clean_from_token(
         &self,
         py: Python,
-        state: &mut RuntimeState,
+        registry: &mio::Registry,
         io_handles: &IOHandlesPin,
         token: Token,
         interest: Interest,
@@ -159,7 +160,7 @@ impl Runtime {
             Ok(None) => {}
             Ok(_) => {
                 let mut source = Source::FD(token.0.try_into().unwrap());
-                _ = state.io.registry().deregister(&mut source);
+                _ = registry.deregister(&mut source);
             }
             _ => {
                 io_handles.update(token, |io_handle| {
@@ -167,7 +168,7 @@ impl Runtime {
                     let IOHandle::Py(data) = io_handle else { unreachable!() };
                     match interest {
                         Interest::READABLE => {
-                            _ = state.io.registry().reregister(&mut source, token, Interest::WRITABLE);
+                            _ = registry.reregister(&mut source, token, Interest::WRITABLE);
                             IOHandle::Py(PyHandleData {
                                 interest: Interest::WRITABLE,
                                 reader: None,
@@ -175,7 +176,7 @@ impl Runtime {
                             })
                         }
                         Interest::WRITABLE => {
-                            _ = state.io.registry().reregister(&mut source, token, Interest::READABLE);
+                            _ = registry.reregister(&mut source, token, Interest::READABLE);
                             IOHandle::Py(PyHandleData {
                                 interest: Interest::WRITABLE,
                                 reader: Some(data.reader.as_ref().unwrap().clone_ref(py)),
@@ -271,14 +272,14 @@ impl Runtime {
         {
             state
                 .handles
-                .push_back((event.token(), Interest::READABLE, Box::new(reader.clone_ref(py))));
+                .push((event.token(), Interest::READABLE, Box::new(reader.clone_ref(py))));
         }
         if let Some(writer) = &handle.writer
             && (event.is_writable() || event.is_write_closed())
         {
             state
                 .handles
-                .push_back((event.token(), Interest::WRITABLE, Box::new(writer.clone_ref(py))));
+                .push((event.token(), Interest::WRITABLE, Box::new(writer.clone_ref(py))));
         }
     }
 
@@ -620,7 +621,7 @@ impl Runtime {
         let mut state = RuntimeState {
             buf: vec![0; 4096].into_boxed_slice(),
             io: poll,
-            handles: VecDeque::with_capacity(128),
+            handles: Vec::with_capacity(128),
             sig_sock,
         };
 
