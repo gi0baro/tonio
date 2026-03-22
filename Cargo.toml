@@ -31,7 +31,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 anyhow = "=1.0"
-arc-swap = "=1.8"
+arc-swap = "=1.9"
 crossbeam-channel = "0.5"
 mio = { version = "=1.1", features = ["net", "os-ext", "os-poll"] }
 papaya = "=0.2"
