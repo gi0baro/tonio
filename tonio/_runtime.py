@@ -52,11 +52,16 @@ class Runtime(_Runtime):
             for sig in self._sigset:
                 _sig_add(sig)
         except Exception:
-            raise
+            if self._sigset:
+                raise
+            return
 
         self._sig_listening = True
 
     def _sig_dereg(self):
+        if not self._sig_listening:
+            return
+
         self._sig_listening = False
 
         for sig in self._sigset:
