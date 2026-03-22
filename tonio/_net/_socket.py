@@ -12,6 +12,8 @@ from .._types import Coro
 
 
 class _Socket(_SocketWrapper):
+    __slots__ = []
+
     def detach(self) -> int:
         return self._sock.detach()
 
@@ -86,10 +88,6 @@ class _Socket(_SocketWrapper):
     def proto(self) -> int:
         return self._sock.proto
 
-    # @property
-    # def did_shutdown_SHUT_WR(self) -> bool:
-    #     return self._did_shutdown_SHUT_WR
-
     def __repr__(self) -> str:
         return repr(self._sock).replace('socket.socket', 'tonio.net.socket.socket')
 
@@ -112,8 +110,8 @@ class _Socket(_SocketWrapper):
 
     def shutdown(self, flag: int) -> None:
         self._sock.shutdown(flag)
-        # if flag in [_stdlib_socket.SHUT_WR, _stdlib_socket.SHUT_RDWR]:
-        #     self._did_shutdown_SHUT_WR = True
+        if flag in [_stdlib_socket.SHUT_WR, _stdlib_socket.SHUT_RDWR]:
+            self._eof_set()
 
     def _resolve_address(
         self,
