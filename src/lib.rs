@@ -41,6 +41,11 @@ fn get_runtime(py: Python<'_>) -> PyResult<&Py<runtime::Runtime>> {
 
 #[pyfunction]
 fn set_runtime(py: Python<'_>, runtime: Py<runtime::Runtime>) -> PyResult<()> {
+    #[cfg(Py_GIL_DISABLED)]
+    if crate::py::sys_gil(py)? {
+        return Err(pyo3::exceptions::PyRuntimeError::new_err("GIL detected"));
+    }
+
     RUNTIME
         .set(py, runtime)
         .map_err(|_| errors::RuntimeAlreadyInitializedError::new_err(()))
