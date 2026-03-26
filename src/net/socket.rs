@@ -1,4 +1,5 @@
 use pyo3::prelude::*;
+use std::sync::atomic;
 // use std::os::raw::c_int;
 
 // use crate::py::sock;
@@ -11,6 +12,7 @@ pub(crate) struct Socket {
     fd: usize,
     #[pyo3(get)]
     _sock: Py<PyAny>,
+    _eof: atomic::AtomicBool,
 }
 
 // impl Socket {
@@ -36,7 +38,19 @@ impl Socket {
     fn new(py: Python, stdlib_sock: Py<PyAny>) -> PyResult<Self> {
         let fd: usize = stdlib_sock.call_method0(py, pyo3::intern!(py, "fileno"))?.extract(py)?;
         stdlib_sock.call_method1(py, pyo3::intern!(py, "setblocking"), (false,))?;
-        Ok(Self { fd, _sock: stdlib_sock })
+        Ok(Self {
+            fd,
+            _sock: stdlib_sock,
+            _eof: false.into(),
+        })
+    }
+
+    fn _eof_get(&self) -> bool {
+        self._eof.load(atomic::Ordering::Acquire)
+    }
+
+    fn _eof_set(&self) {
+        self._eof.store(true, atomic::Ordering::Release);
     }
 }
 

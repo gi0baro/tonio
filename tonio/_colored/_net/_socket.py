@@ -11,6 +11,8 @@ from .._ctl import spawn_blocking
 
 
 class _Socket(_socket._Socket):
+    __slots__ = []
+
     def __enter__(self) -> _Socket:
         return self
 
