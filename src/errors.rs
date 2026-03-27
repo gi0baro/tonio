@@ -19,6 +19,7 @@ create_exception!(
 );
 create_exception!(_tonio, TimeoutError, PyBaseException, "TimeoutError");
 create_exception!(_tonio, WouldBlock, PyException, "WouldBlock");
+create_exception!(_tonio, ResourceBroken, PyException, "ResourceBroken");
 
 pub(crate) fn init_pymodule(module: &Bound<PyModule>) -> PyResult<()> {
     module.add("CancelledError", module.py().get_type::<CancelledError>())?;
@@ -32,6 +33,7 @@ pub(crate) fn init_pymodule(module: &Bound<PyModule>) -> PyResult<()> {
     )?;
     module.add("TimeoutError", module.py().get_type::<TimeoutError>())?;
     module.add("WouldBlock", module.py().get_type::<WouldBlock>())?;
+    module.add("ResourceBroken", module.py().get_type::<ResourceBroken>())?;
 
     Ok(())
 }
