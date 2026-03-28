@@ -18,7 +18,8 @@ pub(crate) struct TLSStream {
 #[pymethods]
 impl TLSStream {
     #[new]
-    fn new() -> Self {
+    #[pyo3(signature = (*_args, **_kwargs))]
+    fn new(_args: &Bound<'_, PyAny>, _kwargs: Option<&Bound<'_, PyAny>>) -> Self {
         Self {
             state: (TLSStreamState::Ready as u8).into(),
         }

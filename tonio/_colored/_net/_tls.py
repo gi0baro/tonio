@@ -57,7 +57,7 @@ class TLSStream(_Stream, _TLSStream):
 
     async def _recv(self) -> None:
         recv_count = self._recv_count
-        async with self._lock_recv():
+        async with self._lock_recv:
             if recv_count == self._recv_count:
                 data = await self.transport.receive_some()
                 if not data:
@@ -71,7 +71,7 @@ class TLSStream(_Stream, _TLSStream):
                 self._recv_count += 1
 
     async def _send(self, data) -> None:
-        async with self._lock_send():
+        async with self._lock_send:
             try:
                 self._egress_stack.extend(data)
                 data = bytes(self._egress_stack)
