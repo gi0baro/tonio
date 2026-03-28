@@ -501,7 +501,7 @@ async def main():
 
     async def _count(lock):
         nonlocal counter
-        async with lock():
+        async with lock:
             counter += 1
             await tonio.yield_now()
             counter -= 1
@@ -571,7 +571,7 @@ async def main():
 
     async def _count(semaphore):
         nonlocal counter
-        async with semaphore():
+        async with semaphore:
             counter += 1
             await tonio.yield_now()
             counter -= 1
@@ -838,6 +838,86 @@ async def main():
 ### Network module
 
 Network primitives are exposed under the `tonio.net` module.
+
+#### Streams
+
+The high-level network primitives in TonIO are centered aroud the `SocketStream` and `SocketListener` objects.
+
+The `SocketListener` object implements an `accept` coroutine which returns a `SocketStream` object.    
+The `SocketStream` object implements the `send_all` and `receive_some` coroutines to send and receive data.    
+Both objects implement a `close` method to shutdown the underlying socket.
+
+You can create and interact with the above objects using some high-level helpers in the `net` module, specifically:
+
+- `open_tcp_stream`: a coroutine to open a `SocketStream` connected to a TCP endpoint
+- `open_unix_socket`: a coroutine to open a `SocketStream` connected to an Unix socket
+- `open_tcp_listeners`: a coroutine to initialise `SocketListener` objects
+- `serve_listeners`: a coroutine to spawn `SocketListener` accept loops targeting a handler
+- `serve_tcp`: a coroutine that join `open_tcp_listener` and `serve_listeners` in one call
+
+<table><tr><td>
+
+`yield` syntax
+
+```python
+from tonio.net import open_tcp_stream, serve_tcp
+
+def server():
+    yield serve_tcp(
+        server_handle, 
+        host='127.0.0.1', 
+        port=8000
+    )
+
+def server_handle(stream):
+    # receive some data
+    data = yield stream.receive_some()
+
+def client():
+    stream = yield open_tcp_stream(
+        host='127.0.0.1', 
+        port=8000
+    )
+    # send some data
+    yield stream.send_all("message")
+```
+</td><td>
+
+`await` syntax
+
+```python
+from tonio.colored.net import open_tcp_stream, serve_tcp
+
+async def server():
+    await serve_tcp(
+        server_handle, 
+        host='127.0.0.1', 
+        port=8000
+    )
+
+async def server_handle(stream):
+    # receive some data
+    data = await stream.receive_some()
+
+async def client():
+    stream = await open_tcp_stream(
+        host='127.0.0.1', 
+        port=8000
+    )
+    # send some data
+    await stream.send_all("message")
+```
+</td></tr></table>
+
+#### SSL streams
+
+TonIO implement SSL wrappers around the streaming APIs through primitives in the `tonio.net.ssl` module.
+
+TonIO provides the `SSLStream` and `SSLListener` object wrappers and the following high-level helpers:
+
+- `open_ssl_over_tcp_stream`: a coroutine to open a `SSLStream` wrapping a TCP `SocketStream`
+- `open_ssl_over_tcp_listeners`: a coroutine to initialise `SSLListener` objects
+- `serve_ssl_over_tcp`: a coroutine that join `open_tls_over_tcp_listeners` and `serve_listeners` in one call
 
 #### Low-level sockets
 
