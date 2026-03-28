@@ -1,6 +1,15 @@
+"""
+Heavily inspired by `trio` code.
+
+:source: (https://github.com/python-trio/trio)
+:copyright: Contributors to the Trio project
+:license: MIT
+"""
+
 import errno
 import os
 import socket as _stdlib_socket
+import ssl as _stdlib_ssl
 import sys
 from contextlib import contextmanager
 from typing import Any, Generator
@@ -12,6 +21,7 @@ from .._time import sleep
 from .._types import Coro
 from ._socket import _Socket, getaddrinfo, socket
 from ._streams import SocketListener, SocketStream
+from ._tls import TLSListener, TLSStream
 
 
 _accept_retry_errnos = {
@@ -224,4 +234,65 @@ def serve_tcp(
     backlog: int | None = None,
 ) -> Coro[None]:
     listeners = yield open_tcp_listeners(port, host=host, backlog=backlog)
+    yield serve_listeners(handler, listeners)
+
+
+def open_tls_over_tcp_stream(
+    host: str | bytes,
+    port: int,
+    *,
+    https_compatible: bool = False,
+    ssl_context: _stdlib_ssl.SSLContext | None = None,
+    happy_eyeballs_delay: float | None = None,
+) -> Coro[TLSStream]:
+    tcp_stream = yield open_tcp_stream(
+        host,
+        port,
+        happy_eyeballs_delay=happy_eyeballs_delay,
+    )
+    if ssl_context is None:
+        ssl_context = _stdlib_ssl.create_default_context()
+
+        if hasattr(_stdlib_ssl, 'OP_IGNORE_UNEXPECTED_EOF'):
+            ssl_context.options &= ~_stdlib_ssl.OP_IGNORE_UNEXPECTED_EOF
+
+    return TLSStream(
+        tcp_stream,
+        ssl_context,
+        server_hostname=host,
+        https_compatible=https_compatible,
+    )
+
+
+def open_tls_over_tcp_listeners(
+    port: int,
+    ssl_context: _stdlib_ssl.SSLContext | None = None,
+    *,
+    host: str | bytes | None = None,
+    https_compatible: bool = False,
+    backlog: int | None = None,
+) -> Coro[list[TLSListener]]:
+    tcp_listeners = yield open_tcp_listeners(port, host=host, backlog=backlog)
+    ssl_listeners = [
+        TLSListener(tcp_listener, ssl_context, https_compatible=https_compatible) for tcp_listener in tcp_listeners
+    ]
+    return ssl_listeners
+
+
+def serve_tls_over_tcp(
+    handler: Any,
+    port: int,
+    ssl_context: _stdlib_ssl.SSLContext,
+    *,
+    host: str | bytes | None = None,
+    https_compatible: bool = False,
+    backlog: int | None = None,
+) -> Coro[None]:
+    listeners = yield open_tls_over_tcp_listeners(
+        port,
+        ssl_context,
+        host=host,
+        https_compatible=https_compatible,
+        backlog=backlog,
+    )
     yield serve_listeners(handler, listeners)
