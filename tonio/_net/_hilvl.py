@@ -256,12 +256,14 @@ def open_tls_over_tcp_stream(
         if hasattr(_stdlib_ssl, 'OP_IGNORE_UNEXPECTED_EOF'):
             ssl_context.options &= ~_stdlib_ssl.OP_IGNORE_UNEXPECTED_EOF
 
-    return TLSStream(
+    ret = TLSStream(
         tcp_stream,
         ssl_context,
         server_hostname=host,
         https_compatible=https_compatible,
     )
+    yield ret.handshake()
+    return ret
 
 
 def open_tls_over_tcp_listeners(

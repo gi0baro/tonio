@@ -125,8 +125,11 @@ class TLSStream(_Stream, _TLSStream):
             to_send = self._egress.read()
             if not want_read and self._ssl.server_side and self._ssl.version() == 'TLSv1.3':
                 self._egress_stack.extend(to_send)
+                to_send = b''
 
-            if want_read:
+            if to_send:
+                yield self._send(to_send)
+            elif want_read:
                 yield self._recv()
 
         self._handshake_post()
@@ -177,6 +180,17 @@ class TLSStream(_Stream, _TLSStream):
         finally:
             self.transport.close()
 
+    def __exit__(self, *args, **kwargs) -> None:
+        if self._state == 4:
+            return
+
+        if self._state == 3 or self._compat_https:
+            self._set_closed()
+            self.transport.close()
+            return
+
+        raise RuntimeError('TLSStream needs to be manually closed')
+
 
 class TLSListener(_Stream):
     __slots__ = [
@@ -198,12 +212,14 @@ class TLSListener(_Stream):
 
     def accept(self) -> Coro[TLSStream]:
         stream = yield self.transport.accept()
-        return TLSStream(
+        ret = TLSStream(
             stream,
             self._ssl,
             server_side=True,
             https_compatible=self._compat_https,
         )
+        yield ret.handshake()
+        return ret
 
     def close(self) -> None:
         self.transport.close()

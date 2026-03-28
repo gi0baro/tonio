@@ -84,7 +84,6 @@ def test_streams_tcp_send(run, ssl_server_ctx, ssl_client_ctx):
 
         def _server_handler(stream: SSLStream):
             yield stream.send_all(b'a' * _SIZE)
-            yield stream.close()
 
         with tonio.scope() as scope:
             scope.spawn(serve_ssl_over_tcp(_server_handler, host='127.0.0.1', port=port, ssl_context=ssl_server_ctx))
