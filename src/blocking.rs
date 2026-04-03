@@ -33,6 +33,7 @@ pub(crate) struct BlockingTask {
     target: Py<PyAny>,
     args: Py<PyAny>,
     kwargs: Option<Py<PyAny>>,
+    ctx: Option<Py<PyAny>>,
 }
 
 impl BlockingTask {
@@ -41,6 +42,7 @@ impl BlockingTask {
         target: Py<PyAny>,
         args: Py<PyAny>,
         kwargs: Option<Py<PyAny>>,
+        ctx: Option<Py<PyAny>>,
     ) -> (Self, Py<BlockingTaskCtl>, Py<Event>, Py<ResultHolder>) {
         let event = Py::new(py, Event::new()).unwrap();
         let rh = Py::new(py, ResultHolder::new(py, 2)).unwrap();
@@ -52,6 +54,7 @@ impl BlockingTask {
             target,
             args,
             kwargs,
+            ctx,
         };
         (task, ctl, event, rh)
     }
@@ -63,12 +66,19 @@ impl BlockingTask {
         );
 
         match unsafe {
+            let ctx = self.ctx.map(|v| v.as_ptr());
             let callable = self.target.into_ptr();
             let args = self.args.into_ptr();
+            if let Some(ctx) = ctx {
+                pyo3::ffi::PyContext_Enter(ctx);
+            }
             let ret = match self.kwargs {
                 Some(kw) => pyo3::ffi::PyObject_Call(callable, args, kw.into_ptr()),
                 None => pyo3::ffi::PyObject_CallObject(callable, args),
             };
+            if let Some(ctx) = ctx {
+                pyo3::ffi::PyContext_Exit(ctx);
+            }
             Bound::from_owned_ptr_or_err(py, ret)
         } {
             Ok(v) => {

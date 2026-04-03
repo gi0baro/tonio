@@ -509,7 +509,15 @@ impl Runtime {
         Py<crate::events::Event>,
         Py<crate::events::ResultHolder>,
     )> {
-        let (task, ctl, event, rh) = crate::blocking::BlockingTask::new(py, f, args, kwargs);
+        let ctx = match self.use_pyctx {
+            true => unsafe {
+                let ret = pyo3::ffi::PyContext_CopyCurrent();
+                let bound = Bound::from_owned_ptr(py, ret).unbind();
+                Some(bound)
+            },
+            false => None,
+        };
+        let (task, ctl, event, rh) = crate::blocking::BlockingTask::new(py, f, args, kwargs, ctx);
         self.blocking_pool
             .run(task)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
