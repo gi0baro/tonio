@@ -49,3 +49,31 @@ def test_abort(run):
     assert not completed
     assert not ret
     assert not stack
+
+
+def test_block_on(run):
+    stack = []
+    ev1 = tonio.Event()
+    ev2 = tonio.Event()
+
+    async def _coro1():
+        stack.append(1)
+        ev1.set()
+        await ev2.wait()
+
+    async def _coro2():
+        await ev1.wait()
+        stack.append(2)
+        ev2.set()
+
+    def _blocking():
+        tonio.block_on(_coro2())
+
+    async def _run():
+        a = tonio.spawn(_coro1())
+        b = tonio.spawn_blocking(_blocking)
+        await b
+        await a
+
+    run(_run())
+    assert set(stack) == {1, 2}

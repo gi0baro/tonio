@@ -1,4 +1,5 @@
 import contextlib
+import threading
 from typing import Any, Awaitable, Callable, Iterable, ParamSpec, TypeVar
 
 from .._tonio import CancelledError, ResultHolder, get_runtime
@@ -105,6 +106,27 @@ async def spawn_blocking(fn: Callable[_Params, _Return], /, *args: _Params.args,
         await event.waiter(None)
         err, val = res.fetch()
     if err is True:
+        raise val
+    return val
+
+
+def block_on(coro):
+    ev = threading.Event()
+    res = ResultHolder()
+
+    async def wrapper():
+        try:
+            ret = await coro
+            res.store((False, ret))
+        except Exception as exc:
+            res.store((True, exc))
+        finally:
+            ev.set()
+
+    spawn.without_tracking(wrapper())
+    ev.wait()
+    err, val = res.fetch()
+    if err:
         raise val
     return val
 

@@ -1,4 +1,5 @@
 import contextlib
+import threading
 from typing import Any, Callable, Iterable, ParamSpec, TypeVar
 
 from ._sync import Barrier
@@ -82,6 +83,27 @@ def spawn_blocking(fn: Callable[_Params, _Return], /, *args: _Params.args, **kwa
         yield event.waiter(None)
         err, val = res.fetch()
     if err is True:
+        raise val
+    return val
+
+
+def block_on(coro: Coro[_T]) -> _T:
+    ev = threading.Event()
+    res = ResultHolder()
+
+    def wrapper():
+        try:
+            ret = yield coro
+            res.store((False, ret))
+        except Exception as exc:
+            res.store((True, exc))
+        finally:
+            ev.set()
+
+    spawn.without_tracking(wrapper())
+    ev.wait()
+    err, val = res.fetch()
+    if err:
         raise val
     return val
 
