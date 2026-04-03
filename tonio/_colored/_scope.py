@@ -1,4 +1,5 @@
 import contextlib
+import inspect
 
 from .._tonio import CancelledError, Scope as _Scope, get_runtime
 from ._ctl import yield_now
@@ -24,11 +25,24 @@ class Scope(_Scope):
         self._incr(1)
         await yield_now()
         waiter, coros = self._stack()
-        for coro in coros:
-            with contextlib.suppress(CancelledError):
-                coro.throw(CancelledError)
+
+        while True:
+            pending = []
+            for coro in coros:
+                cstate = inspect.getcoroutinestate(coro)
+                if cstate in [inspect.CORO_CREATED, inspect.CORO_RUNNING]:
+                    pending.append(coro)
+                    continue
+                if cstate == inspect.CORO_CLOSED:
+                    continue
+                with contextlib.suppress(CancelledError):
+                    coro.throw(CancelledError)
+
+            if not pending:
+                break
+            coros = list(pending)
+
         await waiter
-        return
 
 
 def scope():

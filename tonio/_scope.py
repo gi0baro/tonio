@@ -1,4 +1,5 @@
 import contextlib
+import inspect
 
 from ._tonio import CancelledError, Scope as _Scope, get_runtime
 from ._types import Coro
@@ -16,7 +17,11 @@ class Scope(_Scope):
             except CancelledError as exc:
                 with contextlib.suppress(CancelledError):
                     waiter.throw(exc)
-                raise coro.throw(exc)
+                while True:
+                    if inspect.getgeneratorstate(coro) in [inspect.GEN_CREATED, inspect.GEN_RUNNING]:
+                        yield
+                        continue
+                    raise coro.throw(exc)
             finally:
                 event.set()
 
@@ -33,10 +38,22 @@ class Scope(_Scope):
         return
 
     def __call__(self):
+        yield
         waiter, coros = self._stack()
-        for coro in coros:
-            with contextlib.suppress(CancelledError):
-                coro.throw(CancelledError)
+
+        while True:
+            pending = []
+            for coro in coros:
+                if inspect.getgeneratorstate(coro) == inspect.GEN_RUNNING:
+                    pending.append(coro)
+                    continue
+                with contextlib.suppress(CancelledError):
+                    coro.throw(CancelledError)
+
+            if not pending:
+                break
+            coros = list(pending)
+
         yield waiter
 
 
