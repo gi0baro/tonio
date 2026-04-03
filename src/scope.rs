@@ -7,7 +7,7 @@ use crate::events::{Event, Waiter};
 struct Scope {
     stack: Mutex<Vec<(Py<PyAny>, Py<Event>)>>,
     waiter: Mutex<Option<Py<Waiter>>>,
-    consumed: atomic::AtomicBool,
+    consumed: atomic::AtomicU8,
     cancelled: atomic::AtomicBool,
 }
 
@@ -18,19 +18,19 @@ impl Scope {
         Self {
             stack: Mutex::new(Vec::new()),
             waiter: Mutex::new(None),
-            consumed: false.into(),
+            consumed: 0.into(),
             cancelled: false.into(),
         }
     }
 
-    fn _consume(&self) -> bool {
+    fn _incr(&self, from: u8) -> bool {
         self.consumed
-            .compare_exchange(false, true, atomic::Ordering::Release, atomic::Ordering::Relaxed)
+            .compare_exchange(from, from + 1, atomic::Ordering::Release, atomic::Ordering::Relaxed)
             .is_ok()
     }
 
     fn _track_pygen(&self, pygen: Bound<PyAny>) -> PyResult<Py<PyAny>> {
-        if self.cancelled.load(atomic::Ordering::Acquire) {
+        if self.consumed.load(atomic::Ordering::Acquire) > 1 {
             return Ok(pygen.py().None());
         }
         let py = pygen.py();
@@ -43,7 +43,7 @@ impl Scope {
     }
 
     fn _track_pyasyncgen(&self, pygen: Bound<PyAny>) -> PyResult<Py<PyAny>> {
-        if self.cancelled.load(atomic::Ordering::Acquire) {
+        if self.consumed.load(atomic::Ordering::Acquire) > 1 {
             return Ok(pygen.py().None());
         }
         let py = pygen.py();

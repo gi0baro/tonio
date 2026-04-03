@@ -24,11 +24,12 @@ class Scope(_Scope):
             get_runtime()._spawn_pygen(wrapped_coro)
 
     def __enter__(self):
-        if not self._consume():
+        if not self._incr(0):
             raise RuntimeError('Cannot enter the same scope multiple times.')
         return self
 
     def __exit__(self, exc_type, exc_value, exc_tb):
+        self._incr(1)
         return
 
     def __call__(self):
