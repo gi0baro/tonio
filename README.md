@@ -290,6 +290,12 @@ async def main():
 ```
 </td></tr></table>
 
+#### Running tasks from synchronous contexts
+
+TonIO provides the `block_on` method to spawn coroutines from a synchronous context. It works the same way of `spawn`, except it accepts a single coroutine and it blocks the current thread until the coroutine is completed.
+
+> **Warning:** using `block_on` from within a coroutine might produce a runtime deadlock.
+
 #### Map utilities
 
 TonIO provides the `map` and `map_blocking` utilities to spawn the same operation with an iterable of parameters:
