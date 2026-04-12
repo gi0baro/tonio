@@ -52,6 +52,9 @@ Homepage = 'https://github.com/gi0baro/tonio'
 Funding = 'https://github.com/sponsors/gi0baro'
 Source = 'https://github.com/gi0baro/tonio'
 
+[project.entry-points]
+pytest11 = {tonio = "tonio._testutils._pytest_plugin"}
+
 [build-system]
 requires = ['maturin>=1.8.0,<2']
 build-backend = 'maturin'
