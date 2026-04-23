@@ -1,8 +1,7 @@
-import contextlib
 from typing import TypeVar
 
 from ._events import Event
-from ._tonio import CancelledError, ResultHolder, get_runtime
+from ._tonio import CancelledError, ResultHolder, Waiter, get_runtime
 from ._types import Coro
 
 
@@ -46,30 +45,34 @@ def sleep(timeout: int | float) -> Coro[None]:
 def timeout(coro: Coro[_T], timeout: int | float) -> Coro[tuple[None | _T, bool]]:
     done = Event()
     res = ResultHolder()
-    errs = []
+    checkpoint = Waiter.checkpoint()
+
+    def glue():
+        yield checkpoint
+        return (yield coro)
 
     def wrapper():
         try:
-            ret = yield coro
-            res.store(ret)
+            ret = yield glue()
+            res.store((False, ret))
         except CancelledError:
             pass
         except Exception as exc:
-            errs.append(exc)
+            res.store((True, exc))
         finally:
             done.set()
 
     get_runtime()._spawn_pygen(wrapper())
-
     yield from done.wait(timeout)
+
     if not done.is_set():
-        with contextlib.suppress(CancelledError):
-            coro.throw(CancelledError)
+        checkpoint.unwind()
         return None, False
-    if errs:
-        [err] = errs
-        raise err
-    return res.fetch(), True
+
+    is_err, ret = res.fetch()
+    if is_err:
+        raise ret
+    return ret, True
 
 
 def interval(period: int | float, at: int | None = None) -> Interval:

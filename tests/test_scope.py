@@ -40,12 +40,13 @@ def test_scope_cancel_immediate(run):
     def _run():
         with tonio.scope() as scope:
             scope.cancel()
-            scope.spawn(_sleep(1, 0.2))
+            scope.spawn(_sleep(1, 0.3))
+            yield tonio.sleep(0.1)
         # `spawn` calls after exit are noop
-        scope.spawn(_sleep(2, 0.1))
+        scope.spawn(_sleep(2, 1))
 
         yield scope()
-        yield tonio.sleep(0.4)
+        yield tonio.sleep(0.5)
 
     run(_run())
 

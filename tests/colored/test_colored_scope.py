@@ -36,8 +36,10 @@ def test_scope_cancel_immediate(run):
     async def _run():
         async with tonio.scope() as scope:
             scope.cancel()
-            scope.spawn(_sleep(1, 0.2))
-        await tonio.sleep(0.4)
+            scope.spawn(_sleep(1, 0.3))
+            await tonio.sleep(0.1)
+
+        await tonio.sleep(0.5)
 
     run(_run())
 

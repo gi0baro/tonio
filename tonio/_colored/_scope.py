@@ -1,19 +1,24 @@
-import contextlib
-import inspect
-
-from .._tonio import CancelledError, Scope as _Scope, get_runtime
+from .._tonio import CancelledError, PyAsyncGenScope as _Scope, get_runtime
 from ._ctl import yield_now
 
 
 class Scope(_Scope):
     def spawn(self, coro):
-        async def wrapper(event):
+        async def inner(waiter):
+            await waiter
+            await coro
+
+        async def wrapper(event, waiter):
             try:
-                await coro
+                await inner(waiter)
+            except CancelledError:
+                pass
+            except BaseException as exc:
+                raise exc
             finally:
                 event.set()
 
-        if wrapped_coro := self._track_pyasyncgen(wrapper):
+        if wrapped_coro := self._track(wrapper):
             get_runtime()._spawn_pyasyncgen(wrapped_coro)
 
     async def __aenter__(self):
@@ -24,24 +29,7 @@ class Scope(_Scope):
     async def __aexit__(self, exc_type, exc_value, exc_tb):
         self._incr(1)
         await yield_now()
-        waiter, coros = self._stack()
-
-        while True:
-            pending = []
-            for coro in coros:
-                cstate = inspect.getcoroutinestate(coro)
-                if cstate in [inspect.CORO_CREATED, inspect.CORO_RUNNING]:
-                    pending.append(coro)
-                    continue
-                if cstate == inspect.CORO_CLOSED:
-                    continue
-                with contextlib.suppress(CancelledError):
-                    coro.throw(CancelledError)
-
-            if not pending:
-                break
-            coros = list(pending)
-
+        waiter = self._exit()
         await waiter
 
 

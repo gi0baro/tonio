@@ -1,4 +1,3 @@
-use arc_swap::ArcSwapOption;
 use pyo3::{IntoPyObjectExt, prelude::*, types::PyList};
 use std::{
     collections::VecDeque,
@@ -91,22 +90,26 @@ impl Handle for Py<Event> {
     }
 }
 
+// TODO: split into gen-asyngen classes (needs two different `waiter` build methods in `Event`)
 #[pyclass(frozen, module = "tonio._tonio")]
 pub(crate) struct Waiter {
     registered: atomic::AtomicBool,
-    cancelled: ArcSwapOption<atomic::AtomicBool>,
+    aborted: Arc<atomic::AtomicBool>,
     events: Vec<Py<Event>>,
     timeout: Option<usize>,
+    checkpoint_gen: arc_swap::ArcSwapOption<PyGenSuspension>,
+    checkpoint_asyncgen: arc_swap::ArcSwapOption<PyAsyncGenSuspension>,
 }
 
 impl Waiter {
     fn from_event(py: Python, event: Py<Event>, timeout: Option<usize>) -> Py<Self> {
         let slf = Self {
             registered: false.into(),
-            // cancelled: Mutex::new(None),
-            cancelled: None.into(),
+            aborted: Arc::new(false.into()),
             events: vec![event],
             timeout,
+            checkpoint_gen: None.into(),
+            checkpoint_asyncgen: None.into(),
         };
         Py::new(py, slf).unwrap()
     }
@@ -114,30 +117,28 @@ impl Waiter {
     pub fn new_for_suspension() -> Self {
         Self {
             registered: false.into(),
-            cancelled: Some(Arc::new(false.into())).into(),
+            aborted: Arc::new(false.into()),
             events: vec![],
             timeout: None,
+            checkpoint_gen: None.into(),
+            checkpoint_asyncgen: None.into(),
         }
     }
 
     fn build_sentinel(&self, py: Python) -> Option<Sentinel> {
         match self.events.len() {
-            0..1 => None,
+            0..=1 => None,
             v => Some(Sentinel::new(py, v)),
         }
     }
 
-    fn register(&self, py: Python, runtime: Py<Runtime>, suspension: Arc<Suspension>) {
-        if self.events.is_empty() {
-            suspension.resume(py, runtime.get(), py.None(), 0);
-            return;
-        }
-        self.cancelled.swap(Some(suspension.cancelled.clone()));
+    fn register(&self, py: Python, runtime: Py<Runtime>, suspension: Suspension, checkpoint: Option<Arc<Py<Self>>>) {
         for (idx, event) in self.events.iter().enumerate() {
             let waker = Waker {
                 runtime: runtime.clone_ref(py),
                 target: suspension.clone(),
                 idx,
+                checkpoint: checkpoint.clone(),
             };
             event.get().add_waker(py, waker);
         }
@@ -146,6 +147,7 @@ impl Waiter {
             let timer = Timer {
                 when,
                 target: suspension.clone(),
+                checkpoint,
             };
             runtime.get().add_timer(timer);
         }
@@ -156,7 +158,7 @@ impl Waiter {
         py: Python,
         runtime: Py<Runtime>,
         target: SuspensionTarget,
-        parent: Option<SuspensionData>,
+        parent: Option<PyGenSuspensionData>,
     ) {
         let rself = pyself.get();
         if rself
@@ -165,14 +167,125 @@ impl Waiter {
             .is_ok()
         {
             let sentinel = rself.build_sentinel(py);
-            let suspension = Suspension::from_pygen(target, parent, sentinel, rself.cancelled.load_full());
-            rself.register(py, runtime, suspension);
+            let suspension = PyGenSuspension::from_gen(target, parent, sentinel);
+
+            if rself.events.is_empty() {
+                if let Some(parent_data) = suspension.parent.as_ref() {
+                    if parent_data.0.checkpoint.load_full().is_none() {
+                        parent_data.0.is_checkpoint.store(true, atomic::Ordering::Release);
+                        rself.checkpoint_gen.swap(Some(parent_data.0.clone()));
+                    } else {
+                        rself.checkpoint_gen.swap(parent_data.0.checkpoint.load_full());
+                    }
+                } else {
+                    panic!("Cannot register a checkpoint waiter without a parent");
+                }
+                // println!("CHECKPOINT WAITER {:?}", suspension.target);
+                suspension.resume(py, runtime.get(), py.None(), 0);
+                return;
+            }
+
+            let suspension = Arc::new(suspension);
+            if let Some(checkpoint) = suspension.checkpoint.load_full() {
+                // println!("WAITER SWAP CHECKPOINT {:?}", suspension.target);
+                checkpoint.checkpoint.swap(Some(suspension.clone()));
+            }
+            // println!("WAITER REGISTERED {:?}", suspension.target);
+            rself.register(py, runtime, Suspension::Gen(suspension), None);
         } else {
             panic!("Waiter already registered")
         }
     }
 
-    // fn unregister(&self) {}
+    pub(crate) fn register_pyasyncgen(
+        pyself: Py<Self>,
+        py: Python,
+        runtime: Py<Runtime>,
+        target: SuspensionTarget,
+        checkpoint: Option<Arc<Py<Self>>>,
+    ) {
+        let rself = pyself.get();
+        if rself
+            .registered
+            .compare_exchange(false, true, atomic::Ordering::Release, atomic::Ordering::Relaxed)
+            .is_ok()
+        {
+            let sentinel = rself.build_sentinel(py);
+            if rself.events.is_empty() {
+                let suspension = Arc::new(PyAsyncGenSuspension::from_gen(target, sentinel, rself.aborted.clone()));
+                rself.checkpoint_asyncgen.swap(Some(suspension.clone()));
+                // println!("CHECKPOINT WAITER {:?} {:?}", suspension.target, rself.aborted);
+                if rself.aborted.load(atomic::Ordering::Acquire) {
+                    suspension.error(py, runtime.get(), crate::errors::CancelledError::new_err(""));
+                    return;
+                }
+                suspension.resume(py, runtime.get(), py.None(), 0, Some(Arc::new(pyself.clone_ref(py))));
+                return;
+            }
+            match checkpoint {
+                Some(checkpoint) => {
+                    let rcheckpoint = checkpoint.get();
+                    let suspension = Arc::new(PyAsyncGenSuspension::from_gen(
+                        target,
+                        sentinel,
+                        rcheckpoint.aborted.clone(),
+                    ));
+                    rcheckpoint.checkpoint_asyncgen.swap(Some(suspension.clone()));
+                    // println!("WAITER CHECKPOINT SWAP {:?} {:?}", suspension.target, rself.aborted);
+                    rself.register(py, runtime, Suspension::AsyncGen(suspension), Some(checkpoint));
+                }
+                _ => {
+                    let suspension = Arc::new(PyAsyncGenSuspension::from_gen(target, sentinel, Arc::new(false.into())));
+                    // println!("WAITER REGISTERED {:?}", suspension.target);
+                    rself.register(py, runtime, Suspension::AsyncGen(suspension), None);
+                }
+            }
+        } else {
+            panic!("Waiter already registered")
+        }
+    }
+
+    pub(crate) fn abort_pygen(&self, py: Python) {
+        if self
+            .aborted
+            .compare_exchange(false, true, atomic::Ordering::Release, atomic::Ordering::Relaxed)
+            .is_ok()
+            && let Some(checkpoint) = self.checkpoint_gen.load().as_ref()
+        {
+            match checkpoint.checkpoint.load().as_ref() {
+                Some(checkpoint) => {
+                    checkpoint.error(
+                        py,
+                        crate::get_runtime(py).unwrap().get(),
+                        crate::errors::CancelledError::new_err(""),
+                    );
+                }
+                _ => {
+                    checkpoint.error(
+                        py,
+                        crate::get_runtime(py).unwrap().get(),
+                        crate::errors::CancelledError::new_err(""),
+                    );
+                }
+            }
+        }
+    }
+
+    pub(crate) fn abort_pyasyncgen(&self, py: Python) {
+        if self
+            .aborted
+            .compare_exchange(false, true, atomic::Ordering::Release, atomic::Ordering::Relaxed)
+            .is_ok()
+            && let Some(checkpoint) = self.checkpoint_asyncgen.load().as_ref()
+        {
+            // println!("ABORT ASYNCG {:?}", checkpoint.target);
+            checkpoint.error(
+                py,
+                crate::get_runtime(py).unwrap().get(),
+                crate::errors::CancelledError::new_err(""),
+            );
+        }
+    }
 }
 
 #[pymethods]
@@ -182,10 +295,25 @@ impl Waiter {
     pub fn new(events: Vec<Py<Event>>) -> Self {
         Self {
             registered: false.into(),
-            cancelled: None.into(),
+            aborted: Arc::new(false.into()),
             events,
             timeout: None,
+            checkpoint_gen: None.into(),
+            checkpoint_asyncgen: None.into(),
         }
+    }
+
+    #[staticmethod]
+    fn checkpoint() -> Self {
+        Self::new_for_suspension()
+    }
+
+    fn abort(&self, py: Python) {
+        self.abort_pyasyncgen(py);
+    }
+
+    fn unwind(&self, py: Python) {
+        self.abort_pygen(py);
     }
 
     fn __await__(pyself: Py<Self>) -> Py<Self> {
@@ -204,15 +332,9 @@ impl Waiter {
         Err(pyo3::exceptions::PyStopIteration::new_err(value))
     }
 
-    fn throw(&self, value: Bound<PyAny>) -> PyResult<()> {
-        let py = value.py();
+    pub(crate) fn throw(&self, value: Bound<PyAny>) -> PyResult<()> {
         let err = PyErr::from_value(value);
-        if err.is_instance_of::<crate::errors::CancelledError>(py)
-            && let Some(cancelled) = self.cancelled.load().as_ref()
-        {
-            // println!("waiter cancelled");
-            cancelled.store(true, atomic::Ordering::Release);
-        }
+        // println!("WAITER THROW {:?}", err);
         Err(err)
     }
 }
@@ -265,8 +387,9 @@ impl ResultHolder {
 
 pub struct Waker {
     runtime: Py<Runtime>,
-    target: Arc<Suspension>,
+    target: Suspension,
     idx: usize,
+    checkpoint: Option<Arc<Py<Waiter>>>,
 }
 
 impl Waker {
@@ -280,7 +403,8 @@ impl Waker {
 
     pub fn wake(&self, py: Python) {
         // println!("waker called {:?}", self.idx);
-        self.target.resume(py, self.runtime.get(), py.None(), self.idx);
+        self.target
+            .resume(py, self.runtime.get(), py.None(), self.idx, self.checkpoint.clone());
     }
 
     fn hold(&self) {
@@ -292,7 +416,36 @@ impl Waker {
     // }
 }
 
-pub(crate) type SuspensionData = (Arc<Suspension>, usize);
+#[derive(Clone)]
+pub(crate) enum Suspension {
+    Gen(Arc<PyGenSuspension>),
+    AsyncGen(Arc<PyAsyncGenSuspension>),
+}
+
+impl Suspension {
+    pub(crate) fn resume(
+        &self,
+        py: Python,
+        runtime: &Runtime,
+        value: Py<PyAny>,
+        order: usize,
+        checkpoint: Option<Arc<Py<Waiter>>>,
+    ) {
+        match self {
+            Self::Gen(inner) => inner.resume(py, runtime, value, order),
+            Self::AsyncGen(inner) => inner.resume(py, runtime, value, order, checkpoint),
+        }
+    }
+
+    fn suspend(&self) {
+        match self {
+            Self::Gen(inner) => inner.suspend(),
+            Self::AsyncGen(inner) => inner.suspend(),
+        }
+    }
+}
+
+pub(crate) type PyGenSuspensionData = (Arc<PyGenSuspension>, usize);
 
 #[derive(Debug)]
 pub(crate) enum SuspensionTarget {
@@ -303,50 +456,43 @@ pub(crate) enum SuspensionTarget {
 }
 
 #[derive(Debug)]
-pub(crate) struct Suspension {
-    parent: Option<SuspensionData>,
-    target: SuspensionTarget,
+pub(crate) struct PyGenSuspension {
+    parent: Option<PyGenSuspensionData>,
+    pub target: SuspensionTarget,
     consumed: atomic::AtomicBool,
-    cancelled: Arc<atomic::AtomicBool>,
+    is_checkpoint: atomic::AtomicBool,
     sentinel: Option<Sentinel>,
+    checkpoint: arc_swap::ArcSwapOption<PyGenSuspension>,
 }
 
-impl Suspension {
-    pub(crate) fn from_pygen(
+impl PyGenSuspension {
+    pub(crate) fn from_gen(
         target: SuspensionTarget,
-        parent: Option<SuspensionData>,
+        parent: Option<PyGenSuspensionData>,
         sentinel: Option<Sentinel>,
-        cancelled: Option<Arc<atomic::AtomicBool>>,
-    ) -> Arc<Self> {
-        let cancelled = if let Some(v) = cancelled {
-            v
-        } else {
-            parent
-                .as_ref()
-                .map_or_else(|| Arc::new(false.into()), |v| v.0.cancelled.clone())
-        };
+    ) -> Self {
+        // TODO: rewrite without swap
+        let checkpoint = arc_swap::ArcSwapOption::empty();
+        if let Some(parent_data) = parent.as_ref() {
+            match parent_data.0.is_checkpoint.load(atomic::Ordering::Acquire) {
+                true => checkpoint.swap(Some(parent_data.0.clone())),
+                false => checkpoint.swap(parent_data.0.checkpoint.load_full()),
+            };
+        }
         Self {
             parent,
             target,
             consumed: false.into(),
-            cancelled,
+            is_checkpoint: false.into(),
             sentinel,
+            checkpoint,
         }
-        .into()
     }
 
     fn to_handle(&self, py: Python, value: Py<PyAny>) -> BoxedHandle {
         match &self.target {
             SuspensionTarget::Gen(target) => {
                 let handle = handles::PyGenHandle {
-                    parent: self.parent.clone(),
-                    coro: target.clone_ref(py),
-                    value,
-                };
-                Box::new(handle)
-            }
-            SuspensionTarget::AsyncGen(target) => {
-                let handle = handles::PyAsyncGenHandle {
                     parent: self.parent.clone(),
                     coro: target.clone_ref(py),
                     value,
@@ -362,15 +508,7 @@ impl Suspension {
                 };
                 Box::new(handle)
             }
-            SuspensionTarget::AsyncGenCtx((target, ctx)) => {
-                let handle = handles::PyAsyncGenCtxHandle {
-                    parent: self.parent.clone(),
-                    coro: target.clone_ref(py),
-                    ctx: ctx.clone_ref(py),
-                    value,
-                };
-                Box::new(handle)
-            }
+            _ => unreachable!(),
         }
     }
 
@@ -378,14 +516,6 @@ impl Suspension {
         let value = err.into_value(py).as_any().clone_ref(py);
         match &self.target {
             SuspensionTarget::Gen(target) => {
-                let handle = handles::PyGenThrower {
-                    parent: self.parent.clone(),
-                    coro: target.clone_ref(py),
-                    value,
-                };
-                Box::new(handle)
-            }
-            SuspensionTarget::AsyncGen(target) => {
                 let handle = handles::PyGenThrower {
                     parent: self.parent.clone(),
                     coro: target.clone_ref(py),
@@ -402,15 +532,7 @@ impl Suspension {
                 };
                 Box::new(handle)
             }
-            SuspensionTarget::AsyncGenCtx((target, ctx)) => {
-                let handle = handles::PyGenCtxThrower {
-                    parent: self.parent.clone(),
-                    coro: target.clone_ref(py),
-                    ctx: ctx.clone_ref(py),
-                    value,
-                };
-                Box::new(handle)
-            }
+            _ => unreachable!(),
         }
     }
 
@@ -421,10 +543,6 @@ impl Suspension {
     }
 
     pub fn resume(&self, py: Python, runtime: &Runtime, value: Py<PyAny>, order: usize) {
-        if self.cancelled.load(atomic::Ordering::Acquire) {
-            // println!("suspension resume aborted");
-            return;
-        }
         if let Some(sentinel) = &self.sentinel {
             if let Some(composed_value) = sentinel.decrement(py, (order, value)) {
                 // println!("suspension resume call SENTINEL {:?}", composed_value.bind(py));
@@ -442,6 +560,7 @@ impl Suspension {
     }
 
     pub fn error(&self, py: Python, runtime: &Runtime, value: PyErr) {
+        // println!("GENSUSP ERR {:?} {:?}", self.target, self.consumed);
         if let Some(sentinel) = &self.sentinel {
             if sentinel.consume() {
                 runtime.add_handle(self.to_throw_handle(py, value));
@@ -464,6 +583,123 @@ impl Suspension {
     //         runtime.add_handle(self.to_handle(py, py.None()));
     //     }
     // }
+}
+
+#[derive(Debug)]
+pub(crate) struct PyAsyncGenSuspension {
+    pub target: SuspensionTarget,
+    consumed: atomic::AtomicBool,
+    sentinel: Option<Sentinel>,
+    aborted: Arc<atomic::AtomicBool>,
+}
+
+impl PyAsyncGenSuspension {
+    pub(crate) fn from_gen(
+        target: SuspensionTarget,
+        sentinel: Option<Sentinel>,
+        aborted: Arc<atomic::AtomicBool>,
+    ) -> Self {
+        Self {
+            target,
+            consumed: false.into(),
+            sentinel,
+            aborted,
+        }
+    }
+
+    fn to_handle(&self, py: Python, value: Py<PyAny>, checkpoint: Option<Arc<Py<Waiter>>>) -> BoxedHandle {
+        match &self.target {
+            SuspensionTarget::AsyncGen(target) => {
+                let handle = handles::PyAsyncGenHandle {
+                    coro: target.clone_ref(py),
+                    value,
+                    checkpoint,
+                };
+                Box::new(handle)
+            }
+            SuspensionTarget::AsyncGenCtx((target, ctx)) => {
+                let handle = handles::PyAsyncGenCtxHandle {
+                    coro: target.clone_ref(py),
+                    ctx: ctx.clone_ref(py),
+                    value,
+                    checkpoint,
+                };
+                Box::new(handle)
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn to_throw_handle(&self, py: Python, err: PyErr) -> BoxedHandle {
+        let value = err.into_value(py).as_any().clone_ref(py);
+        match &self.target {
+            SuspensionTarget::AsyncGen(target) => {
+                let handle = handles::PyAsyncGenThrower {
+                    coro: target.clone_ref(py),
+                    value,
+                };
+                Box::new(handle)
+            }
+            SuspensionTarget::AsyncGenCtx((target, ctx)) => {
+                let handle = handles::PyAsyncGenCtxThrower {
+                    coro: target.clone_ref(py),
+                    ctx: ctx.clone_ref(py),
+                    value,
+                };
+                Box::new(handle)
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn suspend(&self) {
+        if let Some(sentinel) = &self.sentinel {
+            sentinel.increment();
+        }
+    }
+
+    pub fn resume(
+        &self,
+        py: Python,
+        runtime: &Runtime,
+        value: Py<PyAny>,
+        order: usize,
+        checkpoint: Option<Arc<Py<Waiter>>>,
+    ) {
+        if self.aborted.load(atomic::Ordering::Acquire) {
+            return;
+        }
+        if let Some(sentinel) = &self.sentinel {
+            if let Some(composed_value) = sentinel.decrement(py, (order, value)) {
+                runtime.add_handle(self.to_handle(py, composed_value, checkpoint));
+            }
+            return;
+        }
+        if self
+            .consumed
+            .compare_exchange(false, true, atomic::Ordering::Release, atomic::Ordering::Relaxed)
+            .is_ok()
+        {
+            runtime.add_handle(self.to_handle(py, value, checkpoint));
+        }
+    }
+
+    pub fn error(&self, py: Python, runtime: &Runtime, value: PyErr) {
+        // println!("AGENSUSP ERR {:?} {:?}", self.target, self.consumed);
+        if let Some(sentinel) = &self.sentinel {
+            if sentinel.consume() {
+                runtime.add_handle(self.to_throw_handle(py, value));
+            }
+            return;
+        }
+        if self
+            .consumed
+            .compare_exchange(false, true, atomic::Ordering::Release, atomic::Ordering::Relaxed)
+            .is_ok()
+        {
+            runtime.add_handle(self.to_throw_handle(py, value));
+        }
+    }
 }
 
 #[derive(Debug)]

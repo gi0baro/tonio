@@ -1,8 +1,7 @@
-import contextlib
 from typing import Awaitable, TypeVar
 
 from .._time import _Interval
-from .._tonio import CancelledError, ResultHolder, get_runtime
+from .._tonio import CancelledError, ResultHolder, Waiter, get_runtime
 from ._events import Event
 
 
@@ -24,30 +23,34 @@ def sleep(timeout: int | float) -> Awaitable[None]:
 async def timeout(coro: Awaitable[_T], timeout: int | float) -> tuple[None | _T, bool]:
     done = Event()
     res = ResultHolder()
-    errs = []
+    checkpoint = Waiter.checkpoint()
+
+    async def glue():
+        await checkpoint
+        return await coro
 
     async def wrapper():
         try:
-            ret = await coro
-            res.store(ret)
+            ret = await glue()
+            res.store((False, ret))
         except CancelledError:
             pass
         except Exception as exc:
-            errs.append(exc)
+            res.store((True, exc))
         finally:
             done.set()
 
     get_runtime()._spawn_pyasyncgen(wrapper())
-
     await done.wait(timeout)
+
     if not done.is_set():
-        with contextlib.suppress(CancelledError):
-            coro.throw(CancelledError)
+        checkpoint.abort()
         return None, False
-    if errs:
-        [err] = errs
-        raise err
-    return res.fetch(), True
+
+    is_err, ret = res.fetch()
+    if is_err:
+        raise ret
+    return ret, True
 
 
 def interval(period: int | float, at: int | None = None) -> Interval:

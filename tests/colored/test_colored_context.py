@@ -4,7 +4,7 @@ import time
 import tonio.colored as tonio
 
 
-def test_contextvar(run_with_ctx):
+def test_contextvar(run):
     var = contextvars.ContextVar('_test')
     bef = []
     res = {}
@@ -23,14 +23,14 @@ def test_contextvar(run_with_ctx):
         out = await tonio.spawn(*[_step(i) for i in range(50)])
         return out
 
-    run_with_ctx(_run())
+    run(_run())
 
     assert set(bef) == {'empty'}
     assert set(aft) == {'empty'}
     assert list(res.keys()) == list(res.values())
 
 
-def test_contextvar_blocking(run_with_ctx):
+def test_contextvar_blocking(run):
     var = contextvars.ContextVar('_test')
     bef = []
     res = {}
@@ -49,7 +49,7 @@ def test_contextvar_blocking(run_with_ctx):
         out = await tonio.map_blocking(_step, range(50))
         return out
 
-    run_with_ctx(_run())
+    run(_run())
 
     assert set(bef) == {'empty'}
     assert set(aft) == {'empty'}

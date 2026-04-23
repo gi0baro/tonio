@@ -23,7 +23,7 @@ mod time;
 
 static RUNTIME: pyo3::sync::PyOnceLock<Py<runtime::Runtime>> = pyo3::sync::PyOnceLock::new();
 
-pub(crate) fn get_lib_version() -> &'static str {
+fn get_lib_version() -> &'static str {
     static LIB_VERSION: OnceLock<String> = OnceLock::new();
 
     LIB_VERSION.get_or_init(|| {
@@ -33,7 +33,7 @@ pub(crate) fn get_lib_version() -> &'static str {
 }
 
 #[pyfunction]
-fn get_runtime(py: Python<'_>) -> PyResult<&Py<runtime::Runtime>> {
+pub(crate) fn get_runtime(py: Python<'_>) -> PyResult<&Py<runtime::Runtime>> {
     RUNTIME
         .get(py)
         .ok_or_else(|| errors::RuntimeNotInitializedError::new_err(()))

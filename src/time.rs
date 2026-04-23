@@ -1,13 +1,13 @@
 use pyo3::prelude::*;
-use std::cmp::Ordering;
-use std::sync::Arc;
+use std::{cmp::Ordering, sync::Arc};
 
 use crate::events::Suspension;
 use crate::handles::Handle;
 
 pub struct Timer {
     pub(crate) when: u128,
-    pub(crate) target: Arc<Suspension>,
+    pub(crate) target: Suspension,
+    pub(crate) checkpoint: Option<Arc<Py<crate::events::Waiter>>>,
 }
 
 // impl Timer {
@@ -53,6 +53,7 @@ impl Handle for Timer {
         runtime: Py<crate::runtime::Runtime>,
         _state: &mut crate::runtime::RuntimeCBHandlerState,
     ) {
-        self.target.resume(py, runtime.get(), py.None(), 0);
+        self.target
+            .resume(py, runtime.get(), py.None(), 0, self.checkpoint.clone());
     }
 }
