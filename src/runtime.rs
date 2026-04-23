@@ -107,7 +107,11 @@ impl Runtime {
         for event in events.iter() {
             if let Some(io_handle) = state.handles.remove(&event.token()) {
                 match io_handle {
-                    IOHandle::Py(handle) => self.handle_io_py(py, event, handle, state.io.registry()),
+                    IOHandle::Py(handle) => {
+                        if let Some(pyhandle) = self.handle_io_py(py, event, handle, state.io.registry()) {
+                            state.handles.insert(event.token(), IOHandle::Py(pyhandle));
+                        }
+                    }
                     IOHandle::Signals => self.handle_io_signals(py, event, state),
                 }
             }
@@ -241,34 +245,65 @@ impl Runtime {
     }
 
     #[inline(always)]
-    fn new_interest_from_py_r(prev: &PyHandleData) -> Option<Interest> {
-        if prev.interest == Interest::READABLE {
-            return None;
-        }
-        Some(Interest::WRITABLE)
-    }
-
-    #[inline(always)]
-    fn new_interest_from_py_w(prev: &PyHandleData) -> Option<Interest> {
-        if prev.interest == Interest::WRITABLE {
-            return None;
-        }
-        Some(Interest::READABLE)
-    }
-
-    #[inline(always)]
-    fn handle_io_py(&self, py: Python, event: &event::Event, handle: PyHandleData, registry: &mio::Registry) {
-        if let Some(reader) = &handle.reader
-            && (event.is_readable() || event.is_read_closed())
-        {
-            Self::registry_clean_from_token(registry, event.token(), Self::new_interest_from_py_r(&handle));
-            _ = self.channel_handle_send.send(Box::new(reader.clone_ref(py)));
-        }
-        if let Some(writer) = &handle.writer
-            && (event.is_writable() || event.is_write_closed())
-        {
-            Self::registry_clean_from_token(registry, event.token(), Self::new_interest_from_py_w(&handle));
-            _ = self.channel_handle_send.send(Box::new(writer.clone_ref(py)));
+    fn handle_io_py(
+        &self,
+        py: Python,
+        event: &event::Event,
+        mut handle: PyHandleData,
+        registry: &mio::Registry,
+    ) -> Option<PyHandleData> {
+        match handle.interest {
+            Interest::READABLE => {
+                if event.is_readable() || event.is_read_closed() {
+                    Self::registry_clean_from_token(registry, event.token(), None);
+                    _ = self
+                        .channel_handle_send
+                        .send(Box::new(handle.reader.as_ref().unwrap().clone_ref(py)));
+                    return None;
+                }
+                Some(handle)
+            }
+            Interest::WRITABLE => {
+                if event.is_writable() || event.is_write_closed() {
+                    Self::registry_clean_from_token(registry, event.token(), None);
+                    _ = self
+                        .channel_handle_send
+                        .send(Box::new(handle.writer.as_ref().unwrap().clone_ref(py)));
+                    return None;
+                }
+                Some(handle)
+            }
+            _ => {
+                let readable = event.is_readable() || event.is_read_closed();
+                let writable = event.is_writable() || event.is_write_closed();
+                match (readable, writable) {
+                    (true, true) => {
+                        Self::registry_clean_from_token(registry, event.token(), None);
+                        _ = self
+                            .channel_handle_send
+                            .send(Box::new(handle.reader.as_ref().unwrap().clone_ref(py)));
+                        _ = self
+                            .channel_handle_send
+                            .send(Box::new(handle.writer.as_ref().unwrap().clone_ref(py)));
+                        None
+                    }
+                    (true, false) => {
+                        let reader = handle.reader.take().unwrap();
+                        handle.interest = Interest::WRITABLE;
+                        Self::registry_clean_from_token(registry, event.token(), Some(handle.interest));
+                        _ = self.channel_handle_send.send(Box::new(reader));
+                        Some(handle)
+                    }
+                    (false, true) => {
+                        let writer = handle.writer.take().unwrap();
+                        handle.interest = Interest::READABLE;
+                        Self::registry_clean_from_token(registry, event.token(), Some(handle.interest));
+                        _ = self.channel_handle_send.send(Box::new(writer));
+                        Some(handle)
+                    }
+                    _ => Some(handle),
+                }
+            }
         }
     }
 
