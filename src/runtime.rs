@@ -357,7 +357,7 @@ impl Runtime {
         Ok(socks)
     }
 
-    fn drop_sig_socket(&self, py: Python, mut state: RuntimeState) -> anyhow::Result<()> {
+    fn drop_sig_socket(&self, py: Python, state: &mut RuntimeState) -> anyhow::Result<()> {
         let fd: usize = self
             .ssock_r
             .load()
@@ -371,6 +371,17 @@ impl Runtime {
         }
 
         Ok(())
+    }
+
+    fn cleanup_io(&self, state: &mut RuntimeState) {
+        let mut fds: Vec<Token> = state.handles.keys().copied().collect();
+        while let Some(token) = fds.pop() {
+            if let Some(IOHandle::Py(_)) = state.handles.remove(&token) {
+                #[allow(clippy::cast_possible_wrap)]
+                let mut source = Source::FD(token.0 as i32);
+                _ = state.io.registry().deregister(&mut source);
+            }
+        }
     }
 
     #[inline(always)]
@@ -636,7 +647,8 @@ impl Runtime {
             }
         }
 
-        _ = rself.drop_sig_socket(py, state);
+        _ = rself.drop_sig_socket(py, &mut state);
+        rself.cleanup_io(&mut state);
         rself.stop_threads(threads_cb_cvar);
         rself.waker.swap(None);
         // rself.stopping.store(false, atomic::Ordering::Release);
