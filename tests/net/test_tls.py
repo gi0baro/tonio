@@ -5,33 +5,33 @@ import trustme
 
 import tonio
 from tonio.net import socket
-from tonio.net.ssl import SSLStream, open_ssl_over_tcp_stream, serve_ssl_over_tcp
+from tonio.net.tls import TLSStream, open_tls_over_tcp_stream, serve_tls_over_tcp
 
 
 _SIZE = 1024 * 1024
 
 
 @pytest.fixture(scope='session')
-def ssl_ca():
+def tls_ca():
     return trustme.CA()
 
 
 @pytest.fixture(scope='session')
-def ssl_cert(ssl_ca):
-    return ssl_ca.issue_server_cert('127.0.0.1')
+def tls_cert(tls_ca):
+    return tls_ca.issue_server_cert('127.0.0.1')
 
 
 @pytest.fixture(scope='function')
-def ssl_server_ctx(ssl_cert):
+def ssl_ctx_server(tls_cert):
     ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-    ssl_cert.configure_cert(ctx)
+    tls_cert.configure_cert(ctx)
     return ctx
 
 
 @pytest.fixture(scope='function')
-def ssl_client_ctx(ssl_ca):
+def ssl_ctx_client(tls_ca):
     ctx = ssl.create_default_context()
-    ssl_ca.configure_trust(ctx)
+    tls_ca.configure_trust(ctx)
     return ctx
 
 
@@ -44,13 +44,13 @@ def _get_port():
         return name[1]
 
 
-def test_ssl_tcp_recv(run, ssl_server_ctx, ssl_client_ctx):
+def test_tls_tcp_recv(run, ssl_ctx_server, ssl_ctx_client):
     def server():
         done = tonio.Event()
         res = []
         port = yield _get_port()
 
-        def _server_handler(stream: SSLStream):
+        def _server_handler(stream: TLSStream):
             buf = b''
             while len(buf) < _SIZE:
                 buf += yield stream.receive_some()
@@ -58,7 +58,7 @@ def test_ssl_tcp_recv(run, ssl_server_ctx, ssl_client_ctx):
             done.set()
 
         with tonio.scope() as scope:
-            scope.spawn(serve_ssl_over_tcp(_server_handler, host='127.0.0.1', port=port, ssl_context=ssl_server_ctx))
+            scope.spawn(serve_tls_over_tcp(_server_handler, host='127.0.0.1', port=port, ssl_context=ssl_ctx_server))
             scope.spawn(client(port))
             yield done.wait()
             scope.cancel()
@@ -68,25 +68,25 @@ def test_ssl_tcp_recv(run, ssl_server_ctx, ssl_client_ctx):
 
     def client(port):
         yield tonio.sleep(0.5)
-        stream: SSLStream = yield open_ssl_over_tcp_stream('127.0.0.1', port=port, ssl_context=ssl_client_ctx)
+        stream: TLSStream = yield open_tls_over_tcp_stream('127.0.0.1', port=port, ssl_context=ssl_ctx_client)
         yield stream.send_all(b'a' * _SIZE)
 
     data = run(server())
     assert data == b'a' * _SIZE
 
 
-def test_streams_tcp_send(run, ssl_server_ctx, ssl_client_ctx):
+def test_tls_tcp_send(run, ssl_ctx_server, ssl_ctx_client):
     done = tonio.Event()
     state = {'data': b''}
 
     def server():
         port = yield _get_port()
 
-        def _server_handler(stream: SSLStream):
+        def _server_handler(stream: TLSStream):
             yield stream.send_all(b'a' * _SIZE)
 
         with tonio.scope() as scope:
-            scope.spawn(serve_ssl_over_tcp(_server_handler, host='127.0.0.1', port=port, ssl_context=ssl_server_ctx))
+            scope.spawn(serve_tls_over_tcp(_server_handler, host='127.0.0.1', port=port, ssl_context=ssl_ctx_server))
             scope.spawn(client(port))
             yield done.wait()
             scope.cancel()
@@ -94,7 +94,7 @@ def test_streams_tcp_send(run, ssl_server_ctx, ssl_client_ctx):
 
     def client(port):
         yield tonio.sleep(0.5)
-        stream: SSLStream = yield open_ssl_over_tcp_stream('127.0.0.1', port=port, ssl_context=ssl_client_ctx)
+        stream: TLSStream = yield open_tls_over_tcp_stream('127.0.0.1', port=port, ssl_context=ssl_ctx_client)
         while len(state['data']) < _SIZE:
             state['data'] += yield stream.receive_some()
         done.set()

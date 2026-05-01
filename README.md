@@ -915,15 +915,15 @@ async def client():
 ```
 </td></tr></table>
 
-#### SSL streams
+#### TLS streams
 
-TonIO implement SSL wrappers around the streaming APIs through primitives in the `tonio.net.ssl` module.
+TonIO implement TLS wrappers around the streaming APIs through primitives in the `tonio.net.tls` module.
 
-TonIO provides the `SSLStream` and `SSLListener` object wrappers and the following high-level helpers:
+TonIO provides the `TLSStream` and `TLSListener` object wrappers and the following high-level helpers:
 
-- `open_ssl_over_tcp_stream`: a coroutine to open a `SSLStream` wrapping a TCP `SocketStream`
-- `open_ssl_over_tcp_listeners`: a coroutine to initialise `SSLListener` objects
-- `serve_ssl_over_tcp`: a coroutine that join `open_tls_over_tcp_listeners` and `serve_listeners` in one call
+- `open_tls_over_tcp_stream`: a coroutine to open a `TLSStream` wrapping a TCP `SocketStream`
+- `open_tls_over_tcp_listeners`: a coroutine to initialise `TLSListener` objects
+- `serve_tls_over_tcp`: a coroutine that join `open_tls_over_tcp_listeners` and `serve_listeners` in one call
 
 #### Low-level sockets
 

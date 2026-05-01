@@ -275,10 +275,10 @@ def open_tls_over_tcp_listeners(
     backlog: int | None = None,
 ) -> Coro[list[TLSListener]]:
     tcp_listeners = yield open_tcp_listeners(port, host=host, backlog=backlog)
-    ssl_listeners = [
+    tls_listeners = [
         TLSListener(tcp_listener, ssl_context, https_compatible=https_compatible) for tcp_listener in tcp_listeners
     ]
-    return ssl_listeners
+    return tls_listeners
 
 
 def serve_tls_over_tcp(
