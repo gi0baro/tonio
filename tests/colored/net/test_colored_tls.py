@@ -74,7 +74,7 @@ def test_tls_tcp_recv(run, ssl_ctx_server, ssl_ctx_client):
     assert data == b'a' * _SIZE
 
 
-def test_tls_tcp_send(run, ssl_server_ctx, ssl_client_ctx):
+def test_tls_tcp_send(run, ssl_ctx_server, ssl_ctx_client):
     done = tonio.Event()
     state = {'data': b''}
 
@@ -85,14 +85,14 @@ def test_tls_tcp_send(run, ssl_server_ctx, ssl_client_ctx):
             await stream.send_all(b'a' * _SIZE)
 
         async with tonio.scope() as scope:
-            scope.spawn(serve_tls_over_tcp(_server_handler, host='127.0.0.1', port=port, ssl_context=ssl_server_ctx))
+            scope.spawn(serve_tls_over_tcp(_server_handler, host='127.0.0.1', port=port, ssl_context=ssl_ctx_server))
             scope.spawn(client(port))
             await done.wait()
             scope.cancel()
 
     async def client(port):
         await tonio.sleep(0.5)
-        stream: TLSStream = await open_tls_over_tcp_stream('127.0.0.1', port=port, ssl_context=ssl_client_ctx)
+        stream: TLSStream = await open_tls_over_tcp_stream('127.0.0.1', port=port, ssl_context=ssl_ctx_client)
         while len(state['data']) < _SIZE:
             state['data'] += await stream.receive_some()
         done.set()
