@@ -334,7 +334,7 @@ impl Waiter {
 }
 
 #[derive(Debug)]
-#[pyclass(frozen, module = "tonio._tonio")]
+#[pyclass(frozen, module = "tonio._tonio", name = "Result")]
 pub(crate) struct ResultHolder {
     size: usize,
     // counter: atomic::AtomicUsize,

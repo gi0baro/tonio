@@ -4,7 +4,7 @@ import socket
 from ._colored._events import Event as EventAw
 from ._events import Event
 from ._signals import _set_sig_wfd, _sig_add, _sig_rem
-from ._tonio import ResultHolder, Runtime as _Runtime, set_runtime as _set_runtime
+from ._tonio import Result, Runtime as _Runtime, set_runtime as _set_runtime
 from ._utils import is_asyncg
 
 
@@ -73,7 +73,7 @@ class Runtime(_Runtime):
 
     def run_pygen_until_complete(self, coro):
         done = Event()
-        res = ResultHolder()
+        res = Result()
         is_exc = False
 
         def runner():
@@ -102,7 +102,7 @@ class Runtime(_Runtime):
 
     def run_pyasyncgen_until_complete(self, coro):
         done = EventAw()
-        res = ResultHolder()
+        res = Result()
         is_exc = False
 
         async def runner():

@@ -5,7 +5,7 @@ from typing import Any, Callable, Iterable, ParamSpec, TypeVar
 from ._events import Event
 from ._scope import Scope
 from ._sync import Barrier
-from ._tonio import CancelledError, ResultHolder, get_runtime
+from ._tonio import CancelledError, Result, get_runtime
 from ._types import Coro
 
 
@@ -20,7 +20,7 @@ class _Spawn:
     @staticmethod
     def __call__(*coros: Coro) -> Coro[Any]:
         barrier = Barrier(len(coros) + 1)
-        res = ResultHolder(len(coros))
+        res = Result(len(coros))
         errs = []
 
         def wrapper(idx, coro, barrier):
@@ -78,7 +78,7 @@ spawn = _Spawn()
 def select(*coros: Coro) -> Coro[Any]:
     scope = Scope()
     sentinel = Event()
-    res = ResultHolder()
+    res = Result()
 
     def wrapper(coro):
         try:
@@ -118,7 +118,7 @@ def spawn_blocking(fn: Callable[_Params, _Return], /, *args: _Params.args, **kwa
 
 def block_on(coro: Coro[_T]) -> _T:
     ev = threading.Event()
-    res = ResultHolder()
+    res = Result()
 
     def wrapper():
         try:

@@ -1,7 +1,7 @@
 from typing import TypeVar
 
 from ._events import Event
-from ._tonio import CancelledError, ResultHolder, Waiter, get_runtime
+from ._tonio import CancelledError, Result, Waiter, get_runtime
 from ._types import Coro
 
 
@@ -44,7 +44,7 @@ def sleep(timeout: int | float) -> Coro[None]:
 
 def timeout(coro: Coro[_T], timeout: int | float) -> Coro[tuple[None | _T, bool]]:
     done = Event()
-    res = ResultHolder()
+    res = Result()
     checkpoint = Waiter.checkpoint()
 
     def glue():

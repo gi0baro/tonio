@@ -7,7 +7,7 @@ from .._colored._ctl import (
     spawn as spawn,
     spawn_blocking as spawn_blocking,
 )
-from .._colored._events import Event as Event, Waiter as Waiter
+from .._colored._events import Event as Event, Result as Result, Waiter as Waiter
 from .._colored._scope import scope as scope
 from .._deco import main as main
 from .._runtime import Runtime as Runtime, new as runtime, run as run  # noqa: F401

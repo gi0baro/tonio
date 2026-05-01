@@ -2,7 +2,7 @@ import contextlib
 import threading
 from typing import Any, Awaitable, Callable, Iterable, ParamSpec, TypeVar
 
-from .._tonio import CancelledError, ResultHolder, get_runtime
+from .._tonio import CancelledError, Result, get_runtime
 from ._events import Event
 from ._scope import Scope
 from ._sync import Barrier
@@ -53,7 +53,7 @@ class _Spawn:
     @staticmethod
     def __call__(*coros) -> Awaitable[Any]:
         barrier = Barrier(len(coros) + 1)
-        res = ResultHolder(len(coros))
+        res = Result(len(coros))
         errs = []
 
         async def wrapper(idx, coro, barrier):
@@ -100,7 +100,7 @@ spawn = _Spawn()
 async def select(*coros) -> Any:
     scope = Scope()
     sentinel = Event()
-    res = ResultHolder()
+    res = Result()
 
     async def wrapper(coro):
         try:
@@ -139,7 +139,7 @@ async def spawn_blocking(fn: Callable[_Params, _Return], /, *args: _Params.args,
 
 def block_on(coro):
     ev = threading.Event()
-    res = ResultHolder()
+    res = Result()
 
     async def wrapper():
         try:

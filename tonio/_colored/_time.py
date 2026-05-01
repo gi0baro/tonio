@@ -1,7 +1,7 @@
 from typing import Awaitable, TypeVar
 
 from .._time import _Interval
-from .._tonio import CancelledError, ResultHolder, Waiter, get_runtime
+from .._tonio import CancelledError, Result, Waiter, get_runtime
 from ._events import Event
 
 
@@ -22,7 +22,7 @@ def sleep(timeout: int | float) -> Awaitable[None]:
 
 async def timeout(coro: Awaitable[_T], timeout: int | float) -> tuple[None | _T, bool]:
     done = Event()
-    res = ResultHolder()
+    res = Result()
     checkpoint = Waiter.checkpoint()
 
     async def glue():
