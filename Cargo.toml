@@ -42,7 +42,7 @@ mimalloc = { version = "0.1.43", default-features = false, features = ["local_dy
 tikv-jemallocator = { version = "0.6.0", default-features = false, features = ["disable_initial_exec_tls"], optional = true }
 
 [target.'cfg(unix)'.dependencies]
-libc = "0.2.159"
+libc = "0.2.186"
 
 [build-dependencies]
 pyo3-build-config = "=0.28"
