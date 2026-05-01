@@ -389,6 +389,52 @@ When you `yield` on the scope, it will wait for all the spawned coroutines to en
 
 > **Note:** as you can see, the *colored* version of `scope` doesn't require to be `await`ed, as it will *yield* when exiting the context.
 
+#### Select first completing task
+
+TonIO also provides a `select` utility to cancel remaining work on the first completing task:
+
+<table><tr><td>
+
+`yield` syntax
+
+```python
+import tonio
+
+def slow_push(target, sleep):
+    yield tonio.sleep(sleep)
+    target.append(True)
+
+@tonio.main
+def main():
+    values = []
+    yield tonio.select(
+        _slow_push(values, 0.1),
+        _slow_push(values, 2)
+    )
+    assert len(values) == 1
+```
+</td><td>
+
+`await` syntax
+
+```python
+import tonio.colored as tonio
+
+async def slow_push(target, sleep):
+    await tonio.sleep(sleep)
+    target.append(True)
+
+@tonio.main
+async def main():
+    values = []
+    await tonio.select(
+        _slow_push(values, 0.1),
+        _slow_push(values, 2)
+    )
+    assert len(values) == 1
+```
+</td></tr></table>
+
 ### Time-related functions
 
 - `tonio.time.time()`: a function returning the runtime's clock (in seconds, microsecond resolution)
