@@ -52,10 +52,9 @@ impl PyGenHandle {
                     // if it's a generator, schedule it to the loop, keeping track of where we came from
                     if pyo3::ffi::PyGen_Check(ret) != 0 {
                         let coro = Bound::from_owned_ptr(py, ret);
-                        let parent = PyGenSuspension::from_gen(
+                        let parent = PyGenSuspension::from_handle(
                             SuspensionTarget::Gen(self.coro.clone_ref(py)),
                             self.parent.clone(),
-                            None,
                         )
                         .into();
                         let next = Self {
@@ -158,10 +157,9 @@ impl PyGenCtxHandle {
                     // if it's a generator, schedule it to the loop, keeping track of where we came from
                     if pyo3::ffi::PyGen_Check(ret) != 0 {
                         let coro = Bound::from_owned_ptr(py, ret);
-                        let parent = PyGenSuspension::from_gen(
+                        let parent = PyGenSuspension::from_handle(
                             SuspensionTarget::GenCtx((self.coro.clone_ref(py), self.ctx.clone_ref(py))),
                             self.parent.clone(),
-                            None,
                         )
                         .into();
                         let next = Self {

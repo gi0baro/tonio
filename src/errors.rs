@@ -21,6 +21,10 @@ create_exception!(_tonio, TimeoutError, PyBaseException, "TimeoutError");
 create_exception!(_tonio, WouldBlock, PyException, "WouldBlock");
 create_exception!(_tonio, ResourceBroken, PyException, "ResourceBroken");
 
+pub(crate) fn abort() -> PyErr {
+    CancelledError::new_err("Execution aborted")
+}
+
 pub(crate) fn init_pymodule(module: &Bound<PyModule>) -> PyResult<()> {
     module.add("CancelledError", module.py().get_type::<CancelledError>())?;
     module.add(
