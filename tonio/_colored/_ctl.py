@@ -4,6 +4,7 @@ from typing import Any, Awaitable, Callable, Iterable, ParamSpec, TypeVar
 
 from .._tonio import CancelledError, ResultHolder, get_runtime
 from ._events import Event
+from ._scope import Scope
 from ._sync import Barrier
 
 
@@ -96,6 +97,32 @@ class _Spawn:
 spawn = _Spawn()
 
 
+async def select(*coros) -> Any:
+    scope = Scope()
+    sentinel = Event()
+    res = ResultHolder()
+
+    async def wrapper(coro):
+        try:
+            ret = await coro
+            res.store((False, ret))
+        except Exception as exc:
+            res.store((True, exc))
+        finally:
+            sentinel.set()
+
+    async with scope:
+        for coro in coros:
+            scope.spawn(wrapper(coro))
+        await sentinel.waiter(None)
+        is_err, ret = res.fetch()
+        scope.cancel()
+
+    if is_err:
+        raise ret
+    return ret
+
+
 async def spawn_blocking(fn: Callable[_Params, _Return], /, *args: _Params.args, **kwargs: _Params.kwargs) -> _Return:
     ctl, event, res = get_runtime()._spawn_blocking(fn, *args, **kwargs)
     with contextlib.suppress(CancelledError):
@@ -137,9 +164,3 @@ def map(fn: Callable[[_T], _Return], /, xs: Iterable[_T]) -> Awaitable[list[_Ret
 
 def map_blocking(fn: Callable[[_T], _Return], /, xs: Iterable[_T]) -> Awaitable[list[_Return]]:
     return spawn(*[spawn_blocking(fn, x) for x in xs])
-
-
-def yield_now() -> Awaitable[None]:
-    event = Event()
-    event.set()
-    return event.waiter(None)

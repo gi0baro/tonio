@@ -1,5 +1,5 @@
 from .._tonio import CancelledError, PyAsyncGenScope as _Scope, get_runtime
-from ._ctl import yield_now
+from . import yield_now
 
 
 class Scope(_Scope):

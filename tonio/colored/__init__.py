@@ -1,10 +1,11 @@
+from .._colored import yield_now as yield_now
 from .._colored._ctl import (
     block_on as block_on,
     map as map,
     map_blocking as map_blocking,
+    select as select,
     spawn as spawn,
     spawn_blocking as spawn_blocking,
-    yield_now as yield_now,
 )
 from .._colored._events import Event as Event, Waiter as Waiter
 from .._colored._scope import scope as scope

@@ -2,6 +2,8 @@ import contextlib
 import threading
 from typing import Any, Callable, Iterable, ParamSpec, TypeVar
 
+from ._events import Event
+from ._scope import Scope
 from ._sync import Barrier
 from ._tonio import CancelledError, ResultHolder, get_runtime
 from ._types import Coro
@@ -71,6 +73,33 @@ class _Spawn:
 
 
 spawn = _Spawn()
+
+
+def select(*coros: Coro) -> Coro[Any]:
+    scope = Scope()
+    sentinel = Event()
+    res = ResultHolder()
+
+    def wrapper(coro):
+        try:
+            ret = yield coro
+            res.store((False, ret))
+        except Exception as exc:
+            res.store((True, exc))
+        finally:
+            sentinel.set()
+
+    with scope:
+        for coro in coros:
+            scope.spawn(wrapper(coro))
+        yield sentinel.waiter(None)
+        scope.cancel()
+
+    is_err, ret = res.fetch()
+    yield scope()
+    if is_err:
+        raise ret
+    return ret
 
 
 def spawn_blocking(fn: Callable[_Params, _Return], /, *args: _Params.args, **kwargs: _Params.kwargs) -> Coro[_Return]:

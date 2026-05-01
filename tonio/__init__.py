@@ -2,6 +2,7 @@ from ._ctl import (
     block_on as block_on,
     map as map,
     map_blocking as map_blocking,
+    select as select,
     spawn as spawn,
     spawn_blocking as spawn_blocking,
 )
