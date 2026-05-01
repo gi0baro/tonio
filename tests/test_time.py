@@ -1,5 +1,7 @@
 import time
 
+import pytest
+
 import tonio
 import tonio.time
 
@@ -45,6 +47,18 @@ def test_timeout(run):
     assert success1 is True
     assert success2 is False
     assert len(stack) == 1
+
+
+def test_timeout_err_transparent(run):
+    def _err():
+        yield
+        raise RuntimeError
+
+    def _run():
+        with pytest.raises(RuntimeError):
+            yield tonio.time.timeout(_err(), 0.3)
+
+    run(_run())
 
 
 def test_interval(run):
