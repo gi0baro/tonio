@@ -75,7 +75,7 @@ def timeout(coro: Coro[_T], timeout: int | float) -> Coro[tuple[None | _T, bool]
     return ret, True
 
 
-def interval(period: int | float, at: int | None = None) -> Interval:
+def interval(period: int | float, at: int | float | None = None) -> Interval:
     period = round(max(0, period * 1_000_000))
-    at = at or get_runtime()._clock
+    at = round((at or time()) * 1_000_000)
     return Interval(at, period)

@@ -1,6 +1,6 @@
 from typing import Awaitable, TypeVar
 
-from .._time import _Interval
+from .._time import _Interval, time
 from .._tonio import CancelledError, Result, Waiter, get_runtime
 from ._events import Event
 
@@ -53,7 +53,7 @@ async def timeout(coro: Awaitable[_T], timeout: int | float) -> tuple[None | _T,
     return ret, True
 
 
-def interval(period: int | float, at: int | None = None) -> Interval:
+def interval(period: int | float, at: int | float | None = None) -> Interval:
     period = round(max(0, period * 1_000_000))
-    at = at or get_runtime()._clock
+    at = round((at or time()) * 1_000_000)
     return Interval(at, period)
