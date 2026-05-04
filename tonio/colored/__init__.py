@@ -1,5 +1,6 @@
 from .._colored import yield_now as yield_now
 from .._colored._ctl import (
+    as_completed as as_completed,
     block_on as block_on,
     map as map,
     map_blocking as map_blocking,

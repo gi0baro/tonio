@@ -143,3 +143,23 @@ def map(fn: Callable[[_T], _Return], /, xs: Iterable[_T]) -> Coro[list[_Return]]
 
 def map_blocking(fn: Callable[[_T], _Return], /, xs: Iterable[_T]) -> Coro[list[_Return]]:
     return spawn(*[spawn_blocking(fn, x) for x in xs])
+
+
+def as_completed(*coros: Coro):
+    targets = [(Event(), Result()) for _ in range(len(coros))]
+    glues = list(reversed(targets))
+
+    def wrapper(coro):
+        ret = yield coro
+        event, res = glues.pop()
+        res.store(ret)
+        event.set()
+
+    def loader(event, res):
+        yield event.waiter(None)
+        return res.fetch()
+
+    spawn.without_tracking(*[wrapper(coro) for coro in coros])
+
+    for event, res in targets:
+        yield loader(event, res)

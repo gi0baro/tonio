@@ -1,4 +1,5 @@
 from ._ctl import (
+    as_completed as as_completed,
     block_on as block_on,
     map as map,
     map_blocking as map_blocking,

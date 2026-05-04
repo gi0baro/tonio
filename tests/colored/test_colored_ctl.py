@@ -59,3 +59,17 @@ def test_select_events(run):
 
     assert run(_run()) == 1
     assert set(exe) == {1}
+
+
+def test_as_completed(run):
+    async def _sleep(x):
+        await tonio.sleep(x)
+        return x
+
+    async def _run():
+        outs = []
+        async for x in tonio.as_completed(_sleep(0.3), _sleep(0.1), _sleep(0.2)):
+            outs.append(x)
+        return outs
+
+    assert run(_run()) == [0.1, 0.2, 0.3]
