@@ -8,7 +8,7 @@ TonIO is a multi-threaded async runtime for free-threaded Python, built in Rust 
 
 TonIO supports both using `yield` and the more canonical `async/await` notations, with the latter being available as part of the `tonio.colored` module. Following code snippets show both the usages.
 
-> **Warning:** despite the fact TonIO supports `async` and `await` notations, it's not compatible with any `asyncio` object like futures and tasks.
+> **Warning:** despite the fact TonIO supports `async` and `await` notations, it's not compatible with any `asyncio` object like futures and tasks. The [TonIO-Monkey](https://github.com/gi0baro/tonio-monkey) project provides patches for some popular `asyncio` packages.
 
 ## In a nutshell
 
@@ -333,6 +333,54 @@ async def task(no):
 @tonio.main
 async def main():
     await tonio.map(task, range(4))
+```
+</td></tr></table>
+
+#### Completion-based iterators
+
+TonIO provides the `as_completed` utility to iterate over task results based on completion order:
+
+<table><tr><td>
+
+`yield` syntax
+
+```python
+import tonio
+
+def _sleep(v):
+    yield tonio.sleep(v)
+    return v
+
+@tonio.main
+def main():
+    vals = []
+    for task in tonio.as_completed(
+        _sleep(0.5),
+        _sleep(0.1),
+        _sleep(0.3),
+    ):
+        vals.append(yield task)
+```
+</td><td>
+
+`await` syntax
+
+```python
+import tonio.colored as tonio
+
+async def _sleep(v):
+    await tonio.sleep(v)
+    return v
+
+@tonio.main
+async def main():
+    vals = []
+    async for val in tonio.as_completed(
+        _sleep(0.5),
+        _sleep(0.1),
+        _sleep(0.3),
+    ):
+        vals.append(val)
 ```
 </td></tr></table>
 
