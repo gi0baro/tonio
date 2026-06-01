@@ -39,7 +39,7 @@ pyo3 = { version = "=0.28", features = ["anyhow", "extension-module", "generate-
 socket2 = { version = "=0.6", features = ["all"] }
 
 mimalloc = { version = "0.1.49", default-features = false, features = ["local_dynamic_tls"], optional = true }
-tikv-jemallocator = { version = "0.6.0", default-features = false, features = ["disable_initial_exec_tls"], optional = true }
+tikv-jemallocator = { version = "0.7.0", default-features = false, features = ["disable_initial_exec_tls"], optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.159"
