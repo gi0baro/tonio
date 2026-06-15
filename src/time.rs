@@ -49,7 +49,7 @@ impl Handle for Timer {
     fn run(
         &self,
         py: Python,
-        runtime: Py<crate::runtime::Runtime>,
+        runtime: &Py<crate::runtime::Runtime>,
         _state: &mut crate::runtime::RuntimeCBHandlerState,
     ) {
         self.target.resume(py, runtime.get(), py.None(), 0);

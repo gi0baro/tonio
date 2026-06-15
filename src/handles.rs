@@ -7,7 +7,7 @@ use crate::{
 };
 
 pub trait Handle {
-    fn run(&self, py: Python, runtime: Py<Runtime>, state: &mut RuntimeCBHandlerState);
+    fn run(&self, py: Python, runtime: &Py<Runtime>, state: &mut RuntimeCBHandlerState);
 }
 
 pub(crate) type BoxedHandle = Box<dyn Handle + Send>;
@@ -36,7 +36,7 @@ impl PyGenHandle {
     }
 
     #[inline]
-    fn call(&self, py: Python, runtime: Py<Runtime>) {
+    fn call(&self, py: Python, runtime: &Py<Runtime>) {
         unsafe {
             let mut ret = std::ptr::null_mut::<pyo3::ffi::PyObject>();
             let result = pyo3::ffi::PyIter_Send(self.coro.as_ptr(), self.value.as_ptr(), &raw mut ret);
@@ -105,7 +105,7 @@ impl PyGenHandle {
 }
 
 impl Handle for PyGenHandle {
-    fn run(&self, py: Python, runtime: Py<Runtime>, _state: &mut crate::runtime::RuntimeCBHandlerState) {
+    fn run(&self, py: Python, runtime: &Py<Runtime>, _state: &mut crate::runtime::RuntimeCBHandlerState) {
         self.call(py, runtime);
     }
 }
@@ -137,7 +137,7 @@ impl PyGenCtxHandle {
     }
 
     #[inline]
-    fn call(&self, py: Python, runtime: Py<Runtime>) {
+    fn call(&self, py: Python, runtime: &Py<Runtime>) {
         unsafe {
             let mut ret = std::ptr::null_mut::<pyo3::ffi::PyObject>();
             let ctx = self.ctx.as_ptr();
@@ -211,7 +211,7 @@ impl PyGenCtxHandle {
 }
 
 impl Handle for PyGenCtxHandle {
-    fn run(&self, py: Python, runtime: Py<Runtime>, _state: &mut crate::runtime::RuntimeCBHandlerState) {
+    fn run(&self, py: Python, runtime: &Py<Runtime>, _state: &mut crate::runtime::RuntimeCBHandlerState) {
         self.call(py, runtime);
     }
 }
@@ -240,7 +240,7 @@ impl PyAsyncGenHandle {
     }
 
     #[inline]
-    fn call(&self, py: Python, runtime: Py<Runtime>) {
+    fn call(&self, py: Python, runtime: &Py<Runtime>) {
         unsafe {
             let mut ret = std::ptr::null_mut::<pyo3::ffi::PyObject>();
             let result = pyo3::ffi::PyIter_Send(self.coro.as_ptr(), self.value.as_ptr(), &raw mut ret);
@@ -282,7 +282,7 @@ impl PyAsyncGenHandle {
 }
 
 impl Handle for PyAsyncGenHandle {
-    fn run(&self, py: Python, runtime: Py<Runtime>, _state: &mut RuntimeCBHandlerState) {
+    fn run(&self, py: Python, runtime: &Py<Runtime>, _state: &mut RuntimeCBHandlerState) {
         self.call(py, runtime);
     }
 }
@@ -314,7 +314,7 @@ impl PyAsyncGenCtxHandle {
     }
 
     #[inline]
-    fn call(&self, py: Python, runtime: Py<Runtime>) {
+    fn call(&self, py: Python, runtime: &Py<Runtime>) {
         unsafe {
             let mut ret = std::ptr::null_mut::<pyo3::ffi::PyObject>();
             let ctx = self.ctx.as_ptr();
@@ -360,7 +360,7 @@ impl PyAsyncGenCtxHandle {
 }
 
 impl Handle for PyAsyncGenCtxHandle {
-    fn run(&self, py: Python, runtime: Py<Runtime>, _state: &mut RuntimeCBHandlerState) {
+    fn run(&self, py: Python, runtime: &Py<Runtime>, _state: &mut RuntimeCBHandlerState) {
         self.call(py, runtime);
     }
 }
@@ -372,7 +372,7 @@ pub(crate) struct PyGenThrower {
 }
 
 impl Handle for PyGenThrower {
-    fn run(&self, py: Python, runtime: Py<Runtime>, _state: &mut RuntimeCBHandlerState) {
+    fn run(&self, py: Python, runtime: &Py<Runtime>, _state: &mut RuntimeCBHandlerState) {
         let throw_method = pyo3::intern!(py, "throw");
 
         unsafe {
@@ -408,7 +408,7 @@ pub(crate) struct PyGenCtxThrower {
 }
 
 impl Handle for PyGenCtxThrower {
-    fn run(&self, py: Python, runtime: Py<Runtime>, _state: &mut RuntimeCBHandlerState) {
+    fn run(&self, py: Python, runtime: &Py<Runtime>, _state: &mut RuntimeCBHandlerState) {
         let throw_method = pyo3::intern!(py, "throw");
         let ctx = self.ctx.as_ptr();
 
@@ -449,7 +449,7 @@ pub(crate) struct PyAsyncGenThrower {
 }
 
 impl Handle for PyAsyncGenThrower {
-    fn run(&self, py: Python, _runtime: Py<Runtime>, _state: &mut RuntimeCBHandlerState) {
+    fn run(&self, py: Python, _runtime: &Py<Runtime>, _state: &mut RuntimeCBHandlerState) {
         let throw_method = pyo3::intern!(py, "throw");
 
         unsafe {
@@ -473,7 +473,7 @@ pub(crate) struct PyAsyncGenCtxThrower {
 }
 
 impl Handle for PyAsyncGenCtxThrower {
-    fn run(&self, py: Python, _runtime: Py<Runtime>, _state: &mut RuntimeCBHandlerState) {
+    fn run(&self, py: Python, _runtime: &Py<Runtime>, _state: &mut RuntimeCBHandlerState) {
         let throw_method = pyo3::intern!(py, "throw");
         let ctx = self.ctx.as_ptr();
 

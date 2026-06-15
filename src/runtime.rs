@@ -205,7 +205,7 @@ impl Runtime {
                     }
                 }) {
                     // println!("running handle");
-                    handle.run(py, runtime.clone_ref(py), &mut state);
+                    handle.run(py, &runtime, &mut state);
                     continue;
                 }
                 drop(runtime);
