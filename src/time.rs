@@ -46,12 +46,7 @@ impl Ord for Timer {
 }
 
 impl Handle for Timer {
-    fn run(
-        &self,
-        py: Python,
-        runtime: Py<crate::runtime::Runtime>,
-        _state: &mut crate::runtime::RuntimeCBHandlerState,
-    ) {
+    fn run(self: Box<Self>, py: Python, runtime: &Py<crate::runtime::Runtime>, _state: &mut crate::work::WorkerState) {
         self.target.resume(py, runtime.get(), py.None(), 0);
     }
 }

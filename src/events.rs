@@ -86,7 +86,7 @@ impl Event {
 
 impl Handle for Py<Event> {
     #[inline]
-    fn run(&self, py: Python, _runtime: Py<Runtime>, _state: &mut crate::runtime::RuntimeCBHandlerState) {
+    fn run(self: Box<Self>, py: Python, _runtime: &Py<Runtime>, _state: &mut crate::work::WorkerState) {
         self.get().set(py);
     }
 }

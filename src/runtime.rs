@@ -1,4 +1,5 @@
 use std::{
+    cell::Cell,
     collections::{BinaryHeap, HashMap, VecDeque},
     io::Read,
     os::fd::FromRawFd,
@@ -8,7 +9,8 @@ use std::{
 };
 
 // use anyhow::Result;
-use crossbeam_channel as channel;
+use crossbeam_deque::{Injector, Worker};
+use crossbeam_utils::sync::Parker;
 use mio::{Interest, Poll, Token, Waker, event};
 use pyo3::prelude::*;
 
@@ -18,6 +20,7 @@ use crate::{
     io::Source,
     // py::copy_context,
     time::Timer,
+    work::{LOCAL_WORKER, WorkSchedule, work_loop},
 };
 
 type IOPyOp = (Token, Interest, Py<crate::events::Event>);
@@ -40,20 +43,16 @@ pub struct RuntimeState {
     sig_sock: (socket2::Socket, socket2::Socket),
 }
 
-pub struct RuntimeCBHandlerState {
-    pub read_buf: Box<[u8]>,
-}
-
 #[pyclass(frozen, subclass, module = "tonio._tonio")]
 pub struct Runtime {
     io_ops: Mutex<VecDeque<IOPyOp>>,
     waker: arc_swap::ArcSwapOption<Waker>,
     handles_sched: Mutex<BinaryHeap<Timer>>,
     blocking_pool: BlockingRunnerPool,
-    channel_handle_send: channel::Sender<BoxedHandle>,
-    channel_handle_recv: channel::Receiver<BoxedHandle>,
-    channel_sig_send: channel::Sender<()>,
-    channel_sig_recv: channel::Receiver<()>,
+    //: `Injector` need to be Boxed as it exceeds the alignment CPython's object allocator gives a pyclass
+    pub work_injector: Box<Injector<BoxedHandle>>,
+    work_schedule: arc_swap::ArcSwapOption<WorkSchedule>,
+    pub work_stopping: atomic::AtomicBool,
     epoch: Instant,
     closed: atomic::AtomicBool,
     sig_set: std::collections::HashSet<u8>,
@@ -127,7 +126,7 @@ impl Runtime {
                         if timer.when > tick {
                             break;
                         }
-                        _ = self.channel_handle_send.send(Box::new(guard_sched.pop().unwrap()));
+                        self.add_handle(Box::new(guard_sched.pop().unwrap()));
                     }
                 }
             }
@@ -185,50 +184,15 @@ impl Runtime {
         }
     }
 
-    #[inline]
-    fn handle_cb_loop(
-        runtime: Py<Runtime>,
-        handles: channel::Receiver<BoxedHandle>,
-        sig: channel::Receiver<()>,
-        cond: Arc<(Mutex<usize>, Condvar)>,
-    ) {
-        // println!("cb handle loop start");
-        let mut state = RuntimeCBHandlerState {
-            read_buf: vec![0; 262_144].into_boxed_slice(),
-        };
-        Python::attach(|py| {
-            loop {
-                if let Some(handle) = py.detach(|| {
-                    channel::select_biased! {
-                        recv(handles) -> msg => msg.ok(),
-                        recv(sig) -> _ => None
-                    }
-                }) {
-                    // println!("running handle");
-                    handle.run(py, runtime.clone_ref(py), &mut state);
-                    continue;
-                }
-                drop(runtime);
-                break;
-            }
-        });
-
-        // println!("cb handle loop stopping");
-        let (lock, cvar) = &*cond;
-        let mut pending = lock.lock().unwrap();
-        *pending -= 1;
-        cvar.notify_one();
-        // println!("cb handle loop stopped");
-    }
-
     fn stop_threads(&self, cond: Arc<(Mutex<usize>, Condvar)>) {
-        // println!("terminating threads");
-        for _ in 0..self.threads_cb {
-            _ = self.channel_sig_send.send(());
+        self.work_stopping.store(true, atomic::Ordering::Release);
+        if let Some(sched) = self.work_schedule.load_full() {
+            for unparker in &sched.unparkers {
+                unparker.unpark();
+            }
         }
         let (lock, cvar) = &*cond;
         let _guard = cvar.wait_while(lock.lock().unwrap(), |pending| *pending > 0);
-        // println!("all threads terminated");
     }
 
     #[inline(always)]
@@ -256,9 +220,7 @@ impl Runtime {
             Interest::READABLE => {
                 if event.is_readable() || event.is_read_closed() {
                     Self::registry_clean_from_token(registry, event.token(), None);
-                    _ = self
-                        .channel_handle_send
-                        .send(Box::new(handle.reader.as_ref().unwrap().clone_ref(py)));
+                    self.add_handle(Box::new(handle.reader.as_ref().unwrap().clone_ref(py)));
                     return None;
                 }
                 Some(handle)
@@ -266,9 +228,7 @@ impl Runtime {
             Interest::WRITABLE => {
                 if event.is_writable() || event.is_write_closed() {
                     Self::registry_clean_from_token(registry, event.token(), None);
-                    _ = self
-                        .channel_handle_send
-                        .send(Box::new(handle.writer.as_ref().unwrap().clone_ref(py)));
+                    self.add_handle(Box::new(handle.writer.as_ref().unwrap().clone_ref(py)));
                     return None;
                 }
                 Some(handle)
@@ -279,26 +239,22 @@ impl Runtime {
                 match (readable, writable) {
                     (true, true) => {
                         Self::registry_clean_from_token(registry, event.token(), None);
-                        _ = self
-                            .channel_handle_send
-                            .send(Box::new(handle.reader.as_ref().unwrap().clone_ref(py)));
-                        _ = self
-                            .channel_handle_send
-                            .send(Box::new(handle.writer.as_ref().unwrap().clone_ref(py)));
+                        self.add_handle(Box::new(handle.reader.as_ref().unwrap().clone_ref(py)));
+                        self.add_handle(Box::new(handle.writer.as_ref().unwrap().clone_ref(py)));
                         None
                     }
                     (true, false) => {
                         let reader = handle.reader.take().unwrap();
                         handle.interest = Interest::WRITABLE;
                         Self::registry_clean_from_token(registry, event.token(), Some(handle.interest));
-                        _ = self.channel_handle_send.send(Box::new(reader));
+                        self.add_handle(Box::new(reader));
                         Some(handle)
                     }
                     (false, true) => {
                         let writer = handle.writer.take().unwrap();
                         handle.interest = Interest::READABLE;
                         Self::registry_clean_from_token(registry, event.token(), Some(handle.interest));
-                        _ = self.channel_handle_send.send(Box::new(writer));
+                        self.add_handle(Box::new(writer));
                         Some(handle)
                     }
                     _ => Some(handle),
@@ -315,7 +271,7 @@ impl Runtime {
             for sig in &state.buf[..read] {
                 if let Some(event) = self.sig_handlers.pin().get(sig) {
                     self.sig_loop_handled.store(true, atomic::Ordering::Relaxed);
-                    _ = self.channel_handle_send.send(Box::new(event.clone_ref(py)));
+                    self.add_handle(Box::new(event.clone_ref(py)));
                 }
             }
         }
@@ -390,7 +346,25 @@ impl Runtime {
     }
 
     pub fn add_handle(&self, handle: BoxedHandle) {
-        _ = self.channel_handle_send.send(handle);
+        let local = LOCAL_WORKER.with(Cell::get);
+        if local.is_null() {
+            self.work_injector.push(handle);
+        } else {
+            unsafe { (*local).push(handle) };
+        }
+        self.maybe_unpark_workers();
+    }
+
+    pub fn defer_handle(&self, handle: BoxedHandle) {
+        self.work_injector.push(handle);
+        self.maybe_unpark_workers();
+    }
+
+    #[inline(always)]
+    fn maybe_unpark_workers(&self) {
+        if let Some(sched) = self.work_schedule.load().as_ref() {
+            sched.unpark_one();
+        }
     }
 
     pub fn add_timer(&self, timer: Timer) {
@@ -413,9 +387,6 @@ impl Runtime {
         context: bool,
         signals: Vec<u8>,
     ) -> Self {
-        let (channel_handle_send, channel_handle_recv) = channel::unbounded();
-        let (channel_sig_send, channel_sig_recv) = channel::bounded(threads);
-
         let mut sig_set = std::collections::HashSet::with_capacity(signals.len());
         for sig in signals {
             sig_set.insert(sig);
@@ -426,10 +397,9 @@ impl Runtime {
             waker: None.into(),
             handles_sched: Mutex::new(BinaryHeap::with_capacity(32)),
             blocking_pool: BlockingRunnerPool::new(threads_blocking, threads_blocking_timeout),
-            channel_handle_send,
-            channel_handle_recv,
-            channel_sig_send,
-            channel_sig_recv,
+            work_injector: Box::new(Injector::new()),
+            work_schedule: None.into(),
+            work_stopping: atomic::AtomicBool::new(false),
             epoch: Instant::now(),
             // ssock: RwLock::new(None),
             closed: atomic::AtomicBool::new(false),
@@ -622,13 +592,31 @@ impl Runtime {
 
         rself.waker.swap(Some(Arc::new(waker)));
 
-        let threads_cb_cvar = Arc::new((Mutex::new(rself.threads_cb), Condvar::new()));
-        for _ in 0..rself.threads_cb {
+        let n = rself.threads_cb;
+        let mut workers = Vec::with_capacity(n);
+        let mut parkers = Vec::with_capacity(n);
+        let mut stealers = Vec::with_capacity(n);
+        let mut unparkers = Vec::with_capacity(n);
+        let mut idle_flags = Vec::with_capacity(n);
+        for _ in 0..n {
+            let worker = Worker::new_lifo();
+            stealers.push(worker.stealer());
+            workers.push(worker);
+            let parker = Parker::new();
+            unparkers.push(parker.unparker().clone());
+            parkers.push(parker);
+            idle_flags.push(atomic::AtomicBool::new(false));
+        }
+        let schedule = Arc::new(WorkSchedule::new(stealers, unparkers, idle_flags));
+        rself.work_stopping.store(false, atomic::Ordering::Release);
+        rself.work_schedule.swap(Some(schedule.clone()));
+
+        let threads_cb_cvar = Arc::new((Mutex::new(n), Condvar::new()));
+        for (idx, (worker, parker)) in workers.into_iter().zip(parkers).enumerate() {
             let runtime = pyself.clone_ref(py);
-            let chan_handle = rself.channel_handle_recv.clone();
-            let chan_sig = rself.channel_sig_recv.clone();
+            let schedule = schedule.clone();
             let cvar = threads_cb_cvar.clone();
-            thread::spawn(|| Self::handle_cb_loop(runtime, chan_handle, chan_sig, cvar));
+            thread::spawn(move || work_loop(schedule, runtime, idx, worker, parker, cvar));
         }
 
         loop {
@@ -650,6 +638,7 @@ impl Runtime {
         _ = rself.drop_sig_socket(py, &mut state);
         rself.cleanup_io(&mut state);
         rself.stop_threads(threads_cb_cvar);
+        rself.work_schedule.swap(None);
         rself.waker.swap(None);
         // rself.stopping.store(false, atomic::Ordering::Release);
         Ok(())

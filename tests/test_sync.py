@@ -11,24 +11,28 @@ class AtomicError(RuntimeError): ...
 def test_semaphore(run):
     stack = []
 
-    def _count(semaphore, i):
+    def _count(semaphore, i, barrier):
         with (yield semaphore()):
             stack.append(i)
+            if barrier:
+                yield barrier.wait()
             if len(stack) > 2:
                 raise AtomicError
             yield
             stack.pop(0)
         return i
 
-    def _run(value):
+    def _run(value, with_barrier=False):
+        stack.clear()
         semaphore = tonio.sync.Semaphore(value)
-        out = yield tonio.spawn(*[_count(semaphore, i) for i in range(50)])
+        barrier = tonio.sync.Barrier(value) if with_barrier else None
+        out = yield tonio.spawn(*[_count(semaphore, i, barrier) for i in range(50)])
         return out
 
     assert run(_run(2)) == list(range(50))
 
     with pytest.raises(ExceptionGroup):
-        run(_run(50))
+        run(_run(50, True))
 
 
 def test_lock(run):

@@ -3,11 +3,12 @@ use std::sync::Arc;
 
 use crate::{
     events::{PyGenSuspension, PyGenSuspensionData, SuspensionTarget, Waiter},
-    runtime::{Runtime, RuntimeCBHandlerState},
+    runtime::Runtime,
+    work::WorkerState,
 };
 
 pub trait Handle {
-    fn run(&self, py: Python, runtime: Py<Runtime>, state: &mut RuntimeCBHandlerState);
+    fn run(self: Box<Self>, py: Python, runtime: &Py<Runtime>, state: &mut WorkerState);
 }
 
 pub(crate) type BoxedHandle = Box<dyn Handle + Send>;
@@ -27,16 +28,8 @@ impl PyGenHandle {
         }
     }
 
-    fn clone_ref(&self, py: Python) -> Self {
-        Self {
-            parent: self.parent.clone(),
-            coro: self.coro.clone_ref(py),
-            value: self.value.clone_ref(py),
-        }
-    }
-
     #[inline]
-    fn call(&self, py: Python, runtime: Py<Runtime>) {
+    fn call(self: Box<Self>, py: Python, runtime: &Py<Runtime>) {
         unsafe {
             let mut ret = std::ptr::null_mut::<pyo3::ffi::PyObject>();
             let result = pyo3::ffi::PyIter_Send(self.coro.as_ptr(), self.value.as_ptr(), &raw mut ret);
@@ -45,7 +38,7 @@ impl PyGenHandle {
                 pyo3::ffi::PySendResult::PYGEN_NEXT => {
                     // if it's just a `yield`, reschedule
                     if ret == py.None().as_ptr() {
-                        runtime.get().add_handle(Box::new(self.clone_ref(py)));
+                        runtime.get().defer_handle(self);
                         return;
                     }
 
@@ -105,7 +98,7 @@ impl PyGenHandle {
 }
 
 impl Handle for PyGenHandle {
-    fn run(&self, py: Python, runtime: Py<Runtime>, _state: &mut crate::runtime::RuntimeCBHandlerState) {
+    fn run(self: Box<Self>, py: Python, runtime: &Py<Runtime>, _state: &mut WorkerState) {
         self.call(py, runtime);
     }
 }
@@ -127,17 +120,8 @@ impl PyGenCtxHandle {
         }
     }
 
-    fn clone_ref(&self, py: Python) -> Self {
-        Self {
-            parent: self.parent.clone(),
-            coro: self.coro.clone_ref(py),
-            ctx: self.ctx.clone_ref(py),
-            value: self.value.clone_ref(py),
-        }
-    }
-
     #[inline]
-    fn call(&self, py: Python, runtime: Py<Runtime>) {
+    fn call(self: Box<Self>, py: Python, runtime: &Py<Runtime>) {
         unsafe {
             let mut ret = std::ptr::null_mut::<pyo3::ffi::PyObject>();
             let ctx = self.ctx.as_ptr();
@@ -150,7 +134,7 @@ impl PyGenCtxHandle {
                 pyo3::ffi::PySendResult::PYGEN_NEXT => {
                     // if it's just a `yield`, reschedule
                     if ret == py.None().as_ptr() {
-                        runtime.get().add_handle(Box::new(self.clone_ref(py)));
+                        runtime.get().defer_handle(self);
                         return;
                     }
 
@@ -211,7 +195,7 @@ impl PyGenCtxHandle {
 }
 
 impl Handle for PyGenCtxHandle {
-    fn run(&self, py: Python, runtime: Py<Runtime>, _state: &mut crate::runtime::RuntimeCBHandlerState) {
+    fn run(self: Box<Self>, py: Python, runtime: &Py<Runtime>, _state: &mut WorkerState) {
         self.call(py, runtime);
     }
 }
@@ -231,16 +215,8 @@ impl PyAsyncGenHandle {
         }
     }
 
-    fn clone_ref(&self, py: Python) -> Self {
-        Self {
-            coro: self.coro.clone_ref(py),
-            value: self.value.clone_ref(py),
-            checkpoint: self.checkpoint.clone(),
-        }
-    }
-
     #[inline]
-    fn call(&self, py: Python, runtime: Py<Runtime>) {
+    fn call(self: Box<Self>, py: Python, runtime: &Py<Runtime>) {
         unsafe {
             let mut ret = std::ptr::null_mut::<pyo3::ffi::PyObject>();
             let result = pyo3::ffi::PyIter_Send(self.coro.as_ptr(), self.value.as_ptr(), &raw mut ret);
@@ -249,7 +225,7 @@ impl PyAsyncGenHandle {
                 pyo3::ffi::PySendResult::PYGEN_NEXT => {
                     // if it's just a `yield`, reschedule
                     if ret == py.None().as_ptr() {
-                        runtime.get().add_handle(Box::new(self.clone_ref(py)));
+                        runtime.get().defer_handle(self);
                         return;
                     }
 
@@ -282,7 +258,7 @@ impl PyAsyncGenHandle {
 }
 
 impl Handle for PyAsyncGenHandle {
-    fn run(&self, py: Python, runtime: Py<Runtime>, _state: &mut RuntimeCBHandlerState) {
+    fn run(self: Box<Self>, py: Python, runtime: &Py<Runtime>, _state: &mut WorkerState) {
         self.call(py, runtime);
     }
 }
@@ -304,17 +280,8 @@ impl PyAsyncGenCtxHandle {
         }
     }
 
-    fn clone_ref(&self, py: Python) -> Self {
-        Self {
-            coro: self.coro.clone_ref(py),
-            ctx: self.ctx.clone_ref(py),
-            value: self.value.clone_ref(py),
-            checkpoint: self.checkpoint.clone(),
-        }
-    }
-
     #[inline]
-    fn call(&self, py: Python, runtime: Py<Runtime>) {
+    fn call(self: Box<Self>, py: Python, runtime: &Py<Runtime>) {
         unsafe {
             let mut ret = std::ptr::null_mut::<pyo3::ffi::PyObject>();
             let ctx = self.ctx.as_ptr();
@@ -327,7 +294,7 @@ impl PyAsyncGenCtxHandle {
                 pyo3::ffi::PySendResult::PYGEN_NEXT => {
                     // if it's just a `yield`, reschedule
                     if ret == py.None().as_ptr() {
-                        runtime.get().add_handle(Box::new(self.clone_ref(py)));
+                        runtime.get().defer_handle(self);
                         return;
                     }
 
@@ -360,7 +327,7 @@ impl PyAsyncGenCtxHandle {
 }
 
 impl Handle for PyAsyncGenCtxHandle {
-    fn run(&self, py: Python, runtime: Py<Runtime>, _state: &mut RuntimeCBHandlerState) {
+    fn run(self: Box<Self>, py: Python, runtime: &Py<Runtime>, _state: &mut WorkerState) {
         self.call(py, runtime);
     }
 }
@@ -372,7 +339,7 @@ pub(crate) struct PyGenThrower {
 }
 
 impl Handle for PyGenThrower {
-    fn run(&self, py: Python, runtime: Py<Runtime>, _state: &mut RuntimeCBHandlerState) {
+    fn run(self: Box<Self>, py: Python, runtime: &Py<Runtime>, _state: &mut WorkerState) {
         let throw_method = pyo3::intern!(py, "throw");
 
         unsafe {
@@ -408,7 +375,7 @@ pub(crate) struct PyGenCtxThrower {
 }
 
 impl Handle for PyGenCtxThrower {
-    fn run(&self, py: Python, runtime: Py<Runtime>, _state: &mut RuntimeCBHandlerState) {
+    fn run(self: Box<Self>, py: Python, runtime: &Py<Runtime>, _state: &mut WorkerState) {
         let throw_method = pyo3::intern!(py, "throw");
         let ctx = self.ctx.as_ptr();
 
@@ -449,7 +416,7 @@ pub(crate) struct PyAsyncGenThrower {
 }
 
 impl Handle for PyAsyncGenThrower {
-    fn run(&self, py: Python, _runtime: Py<Runtime>, _state: &mut RuntimeCBHandlerState) {
+    fn run(self: Box<Self>, py: Python, _runtime: &Py<Runtime>, _state: &mut WorkerState) {
         let throw_method = pyo3::intern!(py, "throw");
 
         unsafe {
@@ -473,7 +440,7 @@ pub(crate) struct PyAsyncGenCtxThrower {
 }
 
 impl Handle for PyAsyncGenCtxThrower {
-    fn run(&self, py: Python, _runtime: Py<Runtime>, _state: &mut RuntimeCBHandlerState) {
+    fn run(self: Box<Self>, py: Python, _runtime: &Py<Runtime>, _state: &mut WorkerState) {
         let throw_method = pyo3::intern!(py, "throw");
         let ctx = self.ctx.as_ptr();
 

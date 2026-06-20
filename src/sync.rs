@@ -503,11 +503,19 @@ impl ChannelReceiver {
     // TODO: clone
 
     fn _receive(&self, py: Python) -> PyResult<(Py<Event>, bool, Option<Py<PyAny>>)> {
+        let (event, message) = self.channel.pull(py);
+        if message.is_some() {
+            return Ok((event, false, message));
+        }
         if self.channel.closed.load(atomic::Ordering::SeqCst) {
+            if let Some((message, want_pull)) = self.channel.tx_queue.lock().unwrap().pop_front() {
+                self.channel.len.fetch_sub(1, atomic::Ordering::SeqCst);
+                want_pull.get().set(py);
+                return Ok((event, false, Some(message)));
+            }
             return Err(pyo3::exceptions::PyBrokenPipeError::new_err("channel closed"));
         }
-        let (event, message) = self.channel.pull(py);
-        Ok((event, message.is_none(), message))
+        Ok((event, true, None))
     }
 }
 
@@ -578,10 +586,16 @@ impl UnboundedChannelReceiver {
 
     fn _receive(&self, py: Python) -> PyResult<(Py<Event>, bool, Option<Py<PyAny>>)> {
         let (event, message, closed) = self.channel.pull(py);
+        if let Some(message) = message {
+            return Ok((event, false, Some(message)));
+        }
         if closed {
+            if let Some(message) = self.channel.tx_queue.lock().unwrap().pop_front() {
+                return Ok((event, false, Some(message)));
+            }
             return Err(pyo3::exceptions::PyBrokenPipeError::new_err("channel closed"));
         }
-        Ok((event, message.is_none(), message))
+        Ok((event, true, None))
     }
 }
 
