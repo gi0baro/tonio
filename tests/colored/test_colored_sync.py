@@ -10,24 +10,28 @@ class AtomicError(RuntimeError): ...
 def test_semaphore(run):
     stack = []
 
-    async def _count(semaphore, i):
+    async def _count(semaphore, i, barrier):
         async with semaphore:
             stack.append(i)
+            if barrier:
+                await barrier.wait()
             if len(stack) > 2:
                 raise AtomicError
             await yield_now()
             stack.pop(0)
         return i
 
-    async def _run(value):
+    async def _run(value, with_barrier=False):
+        stack.clear()
         semaphore = sync.Semaphore(value)
-        out = await spawn(*[_count(semaphore, i) for i in range(50)])
+        barrier = sync.Barrier(value) if with_barrier else None
+        out = await spawn(*[_count(semaphore, i, barrier) for i in range(50)])
         return out
 
     assert run(_run(2)) == list(range(50))
 
     with pytest.raises(ExceptionGroup):
-        run(_run(3))
+        run(_run(50, True))
 
 
 def test_lock(run):
