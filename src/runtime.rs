@@ -49,7 +49,8 @@ pub struct Runtime {
     waker: arc_swap::ArcSwapOption<Waker>,
     handles_sched: Mutex<BinaryHeap<Timer>>,
     blocking_pool: BlockingRunnerPool,
-    pub work_injector: Injector<BoxedHandle>,
+    //: `Injector` need to be Boxed as it exceeds the alignment CPython's object allocator gives a pyclass
+    pub work_injector: Box<Injector<BoxedHandle>>,
     work_schedule: arc_swap::ArcSwapOption<WorkSchedule>,
     pub work_stopping: atomic::AtomicBool,
     epoch: Instant,
@@ -396,7 +397,7 @@ impl Runtime {
             waker: None.into(),
             handles_sched: Mutex::new(BinaryHeap::with_capacity(32)),
             blocking_pool: BlockingRunnerPool::new(threads_blocking, threads_blocking_timeout),
-            work_injector: Injector::new(),
+            work_injector: Box::new(Injector::new()),
             work_schedule: None.into(),
             work_stopping: atomic::AtomicBool::new(false),
             epoch: Instant::now(),
