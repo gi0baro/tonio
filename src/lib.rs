@@ -48,9 +48,8 @@ fn set_runtime(py: Python<'_>, runtime: Py<runtime::Runtime>) -> PyResult<()> {
             return Err(pyo3::exceptions::PyRuntimeError::new_err("GIL detected"));
         }
 
-        // Immortalize runtime so that cross-thread incref/decrefs short-circuit
-        // (no atomic RMW on a single shared cache line). Mirrors CPython's
-        // `_Py_SetImmortal`.
+        //: "immortalize" the runtime obj so that cross-thread incref/decrefs short-circuit
+        //  (no atomic RMW on a single shared cache line). Mirrors CPython's `_Py_SetImmortal`.
         unsafe {
             let op = runtime.as_ptr();
             (*op).ob_tid = 0;
