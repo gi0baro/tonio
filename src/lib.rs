@@ -20,6 +20,7 @@ mod runtime;
 mod scope;
 mod sync;
 mod time;
+mod work;
 
 static RUNTIME: pyo3::sync::PyOnceLock<Py<runtime::Runtime>> = pyo3::sync::PyOnceLock::new();
 
