@@ -220,7 +220,7 @@ impl Runtime {
             Interest::READABLE => {
                 if event.is_readable() || event.is_read_closed() {
                     Self::registry_clean_from_token(registry, event.token(), None);
-                    self.defer_handle(Box::new(handle.reader.as_ref().unwrap().clone_ref(py)));
+                    self.add_io_handle(Box::new(handle.reader.as_ref().unwrap().clone_ref(py)));
                     return None;
                 }
                 Some(handle)
@@ -228,7 +228,7 @@ impl Runtime {
             Interest::WRITABLE => {
                 if event.is_writable() || event.is_write_closed() {
                     Self::registry_clean_from_token(registry, event.token(), None);
-                    self.defer_handle(Box::new(handle.writer.as_ref().unwrap().clone_ref(py)));
+                    self.add_io_handle(Box::new(handle.writer.as_ref().unwrap().clone_ref(py)));
                     return None;
                 }
                 Some(handle)
@@ -239,22 +239,22 @@ impl Runtime {
                 match (readable, writable) {
                     (true, true) => {
                         Self::registry_clean_from_token(registry, event.token(), None);
-                        self.defer_handle(Box::new(handle.reader.as_ref().unwrap().clone_ref(py)));
-                        self.defer_handle(Box::new(handle.writer.as_ref().unwrap().clone_ref(py)));
+                        self.add_io_handle(Box::new(handle.reader.as_ref().unwrap().clone_ref(py)));
+                        self.add_io_handle(Box::new(handle.writer.as_ref().unwrap().clone_ref(py)));
                         None
                     }
                     (true, false) => {
                         let reader = handle.reader.take().unwrap();
                         handle.interest = Interest::WRITABLE;
                         Self::registry_clean_from_token(registry, event.token(), Some(handle.interest));
-                        self.defer_handle(Box::new(reader));
+                        self.add_io_handle(Box::new(reader));
                         Some(handle)
                     }
                     (false, true) => {
                         let writer = handle.writer.take().unwrap();
                         handle.interest = Interest::READABLE;
                         Self::registry_clean_from_token(registry, event.token(), Some(handle.interest));
-                        self.defer_handle(Box::new(writer));
+                        self.add_io_handle(Box::new(writer));
                         Some(handle)
                     }
                     _ => Some(handle),
@@ -271,7 +271,7 @@ impl Runtime {
             for sig in &state.buf[..read] {
                 if let Some(event) = self.sig_handlers.pin().get(sig) {
                     self.sig_loop_handled.store(true, atomic::Ordering::Relaxed);
-                    self.defer_handle(Box::new(event.clone_ref(py)));
+                    self.add_io_handle(Box::new(event.clone_ref(py)));
                 }
             }
         }
@@ -353,6 +353,14 @@ impl Runtime {
             unsafe { (*local).push(handle) };
         }
         self.maybe_unpark_workers();
+    }
+
+    #[inline]
+    pub fn add_io_handle(&self, handle: BoxedHandle) {
+        self.work_injector.push(handle);
+        if let Some(sched) = self.work_schedule.load().as_ref() {
+            sched.unpark();
+        }
     }
 
     pub fn defer_handle(&self, handle: BoxedHandle) {

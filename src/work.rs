@@ -53,12 +53,11 @@ impl WorkSchedule {
         }
     }
 
-    //: wake one parked worker to scan for work
+    //: wake one parked worker to scan for work, with throttling
     pub fn unpark_one(&self) {
         if self.idle_count.load(atomic::Ordering::Acquire) == 0 {
             return;
         }
-        //: if a woken worker is already speculating, it will pick this up
         if self
             .speculation
             .compare_exchange(0, 1, atomic::Ordering::AcqRel, atomic::Ordering::Relaxed)
@@ -66,7 +65,19 @@ impl WorkSchedule {
         {
             return;
         }
+        self.wake_idle();
+    }
 
+    pub fn unpark(&self) {
+        if self.idle_count.load(atomic::Ordering::Acquire) == 0 {
+            return;
+        }
+        self.speculation.fetch_add(1, atomic::Ordering::AcqRel);
+        self.wake_idle();
+    }
+
+    #[inline(always)]
+    fn wake_idle(&self) {
         for (i, flag) in self.idle_flags.iter().enumerate() {
             if flag
                 .compare_exchange(true, false, atomic::Ordering::AcqRel, atomic::Ordering::Relaxed)
@@ -77,7 +88,6 @@ impl WorkSchedule {
                 return;
             }
         }
-        //: no parked worker was actually available, release the reservation
         self.speculation.fetch_sub(1, atomic::Ordering::AcqRel);
     }
 }
@@ -97,7 +107,7 @@ pub(crate) fn find_work(
     }
 
     loop {
-        match injector.steal_batch_and_pop(worker) {
+        match injector.steal() {
             Steal::Success(handle) => return Some(handle),
             Steal::Retry => {}
             Steal::Empty => break,
