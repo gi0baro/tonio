@@ -14,6 +14,9 @@ WD = Path(__file__).resolve().parent
 CPU = multiprocessing.cpu_count()
 MSGS = [1024, 1024 * 10, 1024 * 100]
 CONCURRENCIES = [1, 2, 4, 8]
+# client connections used for the socket thread-scaling test: high enough to keep
+# every server worker fed while we sweep server threads (4 conns starved >4 threads)
+NET_SCALE_CONCURRENCY = 64
 
 
 @contextmanager
@@ -167,7 +170,7 @@ def concurrency():
         results['1m'].append((label, threads, filter_script_results(res, 2, -1)))
 
         with net_server(impl, **extras):
-            res = net_benchmark(concurrencies=[4])
+            res = net_benchmark(concurrencies=[NET_SCALE_CONCURRENCY])
         results['net_sock'].append((label, threads, res))
 
     return results

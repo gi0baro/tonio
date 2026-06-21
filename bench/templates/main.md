@@ -12,10 +12,10 @@ Time to run 1 million coroutines (lower is better).
 {{ _data = data.results["1m"] }}
 {{ _refv = list(filter(lambda v: v[0] == "AsyncIO", _data))[0][1][2] }}
 
-| Runtime | Creation time | Exec time | Total time |
-| --- | --- | --- | --- |
+| Runtime | Creation time | Exec time | Total time | Relative performance |
+| --- | --- | --- | --- | --- |
 {{ for label, res in _data: }}
-| {{ =label }} | {{ =round(res[0] * 1000, 3) }}ms | {{ =round(res[1] * 1000, 3) }}ms | {{ =round(res[2] * 1000, 3) }}ms ({{ =round(_refv / res[2], 2) }}x) |
+| {{ =label }} | {{ =round(res[0] * 1000, 3) }}ms | {{ =round(res[1] * 1000, 3) }}ms | {{ =round(res[2] * 1000, 3) }}ms | {{ =round(_refv / res[2], 2) }}x |
 {{ pass }}
 
 ### Sockets
@@ -65,5 +65,5 @@ TCP echo server with raw sockets comparison using 1KB, 10KB and 100KB messages.
 | Mode | Threads | Throughput (10KB) |
 | --- | --- | --- |
 {{ for label, threads, res in _data: }}
-| {{ =label }} | {{ =threads }} | {{ =res["4"]["10240"]["rps"] }} |
+| {{ =label }} | {{ =threads }} | {{ =res["64"]["10240"]["rps"] }} |
 {{ pass }}
