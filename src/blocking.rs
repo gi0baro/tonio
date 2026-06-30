@@ -1,7 +1,6 @@
 use crossbeam_channel as channel;
 use pyo3::{PyTypeInfo, prelude::*};
 use std::{
-    ptr::NonNull,
     sync::{Arc, atomic},
     thread, time,
 };
@@ -67,22 +66,18 @@ impl BlockingTask {
         );
 
         match unsafe {
-            let ctx_copy = self
-                .ctx
-                .as_ref()
-                .and_then(|v| NonNull::new(pyo3::ffi::PyContext_Copy(v.as_ptr())));
+            let ctx = self.ctx.as_ref().map(|v| v.as_ptr());
             let callable = self.target.into_ptr();
             let args = self.args.into_ptr();
-            if let Some(cctx) = ctx_copy {
-                pyo3::ffi::PyContext_Enter(cctx.as_ptr());
+            if let Some(ctx) = ctx {
+                pyo3::ffi::PyContext_Enter(ctx);
             }
             let ret = match self.kwargs {
                 Some(kw) => pyo3::ffi::PyObject_Call(callable, args, kw.into_ptr()),
                 None => pyo3::ffi::PyObject_CallObject(callable, args),
             };
-            if let Some(cctx) = ctx_copy {
-                pyo3::ffi::PyContext_Exit(cctx.as_ptr());
-                pyo3::ffi::Py_DECREF(cctx.as_ptr());
+            if let Some(ctx) = ctx {
+                pyo3::ffi::PyContext_Exit(ctx);
             }
             Bound::from_owned_ptr_or_err(py, ret)
         } {
