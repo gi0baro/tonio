@@ -56,7 +56,7 @@ class _Socket(_socket._Socket):
 
             try:
                 conn, address = self._sock.accept()
-            except (BlockingIOError, InterruptedError):
+            except BlockingIOError, InterruptedError:
                 event = runtime._io_event_r(fd)
                 continue
             except BaseException as exc:
@@ -71,7 +71,7 @@ class _Socket(_socket._Socket):
 
         try:
             self._sock.connect(address)
-        except (BlockingIOError, InterruptedError):
+        except BlockingIOError, InterruptedError:
             pass
         else:
             return
@@ -87,7 +87,7 @@ class _Socket(_socket._Socket):
                 err = self._sock.getsockopt(_stdlib_socket.SOL_SOCKET, _stdlib_socket.SO_ERROR)
                 if err != 0:
                     raise OSError(err, 'Connect call failed %s' % (address,))
-            except (BlockingIOError, InterruptedError):
+            except BlockingIOError, InterruptedError:
                 event = runtime._io_event_w(fd)
                 continue
             except BaseException as exc:
@@ -98,7 +98,7 @@ class _Socket(_socket._Socket):
     async def recv(self, bufsize: int, flags: int = 0, /) -> bytes:
         try:
             return self._sock.recv(bufsize, flags)
-        except (BlockingIOError, InterruptedError):
+        except BlockingIOError, InterruptedError:
             pass
 
         runtime = get_runtime()
@@ -110,7 +110,7 @@ class _Socket(_socket._Socket):
 
             try:
                 ret = self._sock.recv(bufsize, flags)
-            except (BlockingIOError, InterruptedError):
+            except BlockingIOError, InterruptedError:
                 event = runtime._io_event_r(fd)
                 continue
             except BaseException as exc:
@@ -123,7 +123,7 @@ class _Socket(_socket._Socket):
     async def recv_into(self, /, buffer, nbytes: int = 0, flags: int = 0) -> int:
         try:
             return self._sock.recv_into(buffer, nbytes, flags)
-        except (BlockingIOError, InterruptedError):
+        except BlockingIOError, InterruptedError:
             pass
 
         runtime = get_runtime()
@@ -135,7 +135,7 @@ class _Socket(_socket._Socket):
 
             try:
                 ret = self._sock.recv_into(buffer, nbytes, flags)
-            except (BlockingIOError, InterruptedError):
+            except BlockingIOError, InterruptedError:
                 event = runtime._io_event_r(fd)
                 continue
             except BaseException as exc:
@@ -148,7 +148,7 @@ class _Socket(_socket._Socket):
     async def recvfrom(self, bufsize: int, flags: int = 0, /) -> tuple[bytes, Any]:
         try:
             return self._sock.recvfrom(bufsize, flags)
-        except (BlockingIOError, InterruptedError):
+        except BlockingIOError, InterruptedError:
             pass
 
         runtime = get_runtime()
@@ -160,7 +160,7 @@ class _Socket(_socket._Socket):
 
             try:
                 ret = self._sock.recvfrom(bufsize, flags)
-            except (BlockingIOError, InterruptedError):
+            except BlockingIOError, InterruptedError:
                 event = runtime._io_event_r(fd)
                 continue
             except BaseException as exc:
@@ -173,7 +173,7 @@ class _Socket(_socket._Socket):
     async def recvfrom_into(self, /, buffer, nbytes: int = 0, flags: int = 0) -> tuple[int, Any]:
         try:
             return self._sock.recvfrom_into(buffer, nbytes, flags)
-        except (BlockingIOError, InterruptedError):
+        except BlockingIOError, InterruptedError:
             pass
 
         runtime = get_runtime()
@@ -185,7 +185,7 @@ class _Socket(_socket._Socket):
 
             try:
                 ret = self._sock.recvfrom_into(buffer, nbytes, flags)
-            except (BlockingIOError, InterruptedError):
+            except BlockingIOError, InterruptedError:
                 event = runtime._io_event_r(fd)
                 continue
             except BaseException as exc:
@@ -206,7 +206,7 @@ class _Socket(_socket._Socket):
         ) -> tuple[bytes, list[tuple[int, int, bytes]], int, object]:
             try:
                 return self._sock.recvmsg(bufsize, ancbufsize, flags)
-            except (BlockingIOError, InterruptedError):
+            except BlockingIOError, InterruptedError:
                 pass
 
             runtime = get_runtime()
@@ -218,7 +218,7 @@ class _Socket(_socket._Socket):
 
                 try:
                     ret = self._sock.recvmsg(bufsize, ancbufsize, flags)
-                except (BlockingIOError, InterruptedError):
+                except BlockingIOError, InterruptedError:
                     event = runtime._io_event_r(fd)
                     continue
                 except BaseException as exc:
@@ -237,7 +237,7 @@ class _Socket(_socket._Socket):
         ) -> tuple[int, list[tuple[int, int, bytes]], int, object]:
             try:
                 return self._sock.recvmsg_into(buffers, ancbufsize, flags)
-            except (BlockingIOError, InterruptedError):
+            except BlockingIOError, InterruptedError:
                 pass
 
             runtime = get_runtime()
@@ -248,7 +248,7 @@ class _Socket(_socket._Socket):
                 await event.waiter(None)
                 try:
                     ret = self._sock.recvmsg_into(buffers, ancbufsize, flags)
-                except (BlockingIOError, InterruptedError):
+                except BlockingIOError, InterruptedError:
                     event = runtime._io_event_r(fd)
                     continue
                 except BaseException as exc:
@@ -264,7 +264,7 @@ class _Socket(_socket._Socket):
 
         try:
             return self._sock.send(data, flags)
-        except (BlockingIOError, InterruptedError):
+        except BlockingIOError, InterruptedError:
             pass
 
         runtime = get_runtime()
@@ -276,7 +276,7 @@ class _Socket(_socket._Socket):
 
             try:
                 ret = self._sock.send(data, flags)
-            except (BlockingIOError, InterruptedError):
+            except BlockingIOError, InterruptedError:
                 event = runtime._io_event_w(fd)
                 continue
             except BaseException as exc:
@@ -293,7 +293,7 @@ class _Socket(_socket._Socket):
         address = await self._resolve_address(address, local=False)
         try:
             return self._sock.sendto(data, address)
-        except (BlockingIOError, InterruptedError):
+        except BlockingIOError, InterruptedError:
             pass
 
         runtime = get_runtime()
@@ -305,7 +305,7 @@ class _Socket(_socket._Socket):
 
             try:
                 ret = self._sock.sendto(data, address)
-            except (BlockingIOError, InterruptedError):
+            except BlockingIOError, InterruptedError:
                 event = runtime._io_event_w(fd)
                 continue
             except BaseException as exc:
@@ -329,7 +329,7 @@ class _Socket(_socket._Socket):
 
             try:
                 return self._sock.sendmsg(buffers, ancdata, flags, address)
-            except (BlockingIOError, InterruptedError):
+            except BlockingIOError, InterruptedError:
                 pass
 
             runtime = get_runtime()
@@ -341,7 +341,7 @@ class _Socket(_socket._Socket):
 
                 try:
                     ret = self._sock.sendmsg(buffers, ancdata, flags, address)
-                except (BlockingIOError, InterruptedError):
+                except BlockingIOError, InterruptedError:
                     event = runtime._io_event_w(fd)
                     continue
                 except BaseException as exc:
@@ -424,7 +424,7 @@ async def _resolve_address(
     if isinstance(port, int) and host is not None:
         try:
             _stdlib_socket.inet_pton(family, host)
-        except (OSError, TypeError):
+        except OSError, TypeError:
             pass
         else:
             return address
