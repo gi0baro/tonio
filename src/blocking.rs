@@ -66,7 +66,7 @@ impl BlockingTask {
         );
 
         match unsafe {
-            let ctx = self.ctx.map(|v| v.as_ptr());
+            let ctx = self.ctx.as_ref().map(|v| v.as_ptr());
             let callable = self.target.into_ptr();
             let args = self.args.into_ptr();
             if let Some(ctx) = ctx {
