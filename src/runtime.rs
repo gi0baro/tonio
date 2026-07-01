@@ -85,6 +85,8 @@ impl Runtime {
                 if timer.when > tick {
                     let dt = (timer.when - tick) as u64;
                     sched_time = Some(dt);
+                } else {
+                    sched_time = Some(0);
                 }
             }
         }
