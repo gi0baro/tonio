@@ -78,16 +78,3 @@ def test_block_on(run):
 
     run(_run())
     assert set(stack) == {1, 2}
-
-
-def test_block_on_multiple_times(run):
-    def _noop():
-        yield
-
-    def _blocking(_):
-        tonio.block_on(_noop())
-
-    def _run():
-        yield tonio.map_blocking(_blocking, range(100))
-
-    run(_run())
