@@ -82,10 +82,11 @@ impl Runtime {
             let guard_sched = self.handles_sched.lock().unwrap();
             if let Some(timer) = guard_sched.peek() {
                 let tick = Instant::now().duration_since(self.epoch).as_micros();
-                if timer.when > tick {
-                    let dt = (timer.when - tick) as u64;
-                    sched_time = Some(dt);
-                }
+                sched_time = Some(if timer.when > tick {
+                    (timer.when - tick) as u64
+                } else {
+                    0
+                });
             }
         }
 
