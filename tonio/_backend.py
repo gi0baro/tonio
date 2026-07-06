@@ -25,16 +25,16 @@ REQUESTED_BACKEND = os.environ.get('TONIO_BACKEND', 'auto')
 if REQUESTED_BACKEND not in ('auto', 'native', 'asyncio'):
     raise RuntimeError(f"Invalid TONIO_BACKEND={REQUESTED_BACKEND!r}; expected 'auto', 'native', or 'asyncio'")
 
-SELECTED_BACKEND = REQUESTED_BACKEND
+BACKEND = REQUESTED_BACKEND
 if REQUESTED_BACKEND == 'auto':
     if sys.platform == 'win32':
-        SELECTED_BACKEND = 'asyncio'
+        BACKEND = 'asyncio'
     else:
-        SELECTED_BACKEND = 'native'
+        BACKEND = 'native'
 
-assert SELECTED_BACKEND != 'auto'
+assert BACKEND != 'auto'
 
-if SELECTED_BACKEND == 'asyncio':
+if BACKEND == 'asyncio':
     from ._asyncio_backend._events import Event, Result, Waiter
     from ._asyncio_backend._net import Socket, TLSStream
     from ._asyncio_backend._runtime import BlockingTaskCtl, Runtime, get_runtime, set_runtime
@@ -60,7 +60,7 @@ if SELECTED_BACKEND == 'asyncio':
         TimeoutError,
         WouldBlock,
     )
-elif SELECTED_BACKEND == 'native':
+elif BACKEND == 'native':
     from ._tonio import (
         Barrier as Barrier,
         BlockingTaskCtl as BlockingTaskCtl,
