@@ -114,6 +114,8 @@ class Event:
             self._loop = None
 
     def set(self):
+        if self.is_set():
+            return
         # Only defer the real flag set when called from a foreign thread.
         # Otherwise set it synchoronolusly.
         # Kinda mimics the AtomicBool of the native counterpart.
