@@ -154,15 +154,15 @@ class _IOWaiter(_Waiter):
         self._fd = fd
         self._remove_fn = remove_fn
 
-        async def _wait(self):
+    async def _wait(self):
+        try:
+            await super()._wait()
+        except BaseException:
             try:
-                await super()._wait()
-            except BaseException as e:
-                try:
-                    self._remove_fn(self._fd)
-                except Exception:
-                    pass
-                raise e
+                self._remove_fn(self._fd)
+            except Exception:
+                pass
+            raise
 
 
 class _IOEvent(Event):
