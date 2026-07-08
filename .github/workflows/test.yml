@@ -38,6 +38,35 @@ jobs:
         source .venv/bin/activate
         make test
 
+  linux-asyncio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+        - '3.14t'
+        - '3.15t'
+
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
+      TONIO_BACKEND: asyncio
+    steps:
+    - uses: actions/checkout@v6
+    - uses: astral-sh/setup-uv@v7
+      with:
+        enable-cache: false
+    - name: Install
+      run: |
+        uv python install ${{ env.UV_PYTHON }}
+        uv venv .venv
+        uv sync --group build --group test
+        uv run --no-sync maturin develop --uv
+    - name: Test
+      run: |
+        source .venv/bin/activate
+        make test
+
   macos:
     runs-on: macos-latest
     timeout-minutes: 5
