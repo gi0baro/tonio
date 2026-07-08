@@ -8,6 +8,7 @@ import inspect
 import sys
 import threading
 import time as _stdlib_time
+from types import CoroutineType
 from typing import Any
 
 from ._events import Event, Result
@@ -162,12 +163,20 @@ class Runtime:
         self._sig_wfd = -1
         self._epoch = _stdlib_time.monotonic()
         self._loop: asyncio.AbstractEventLoop = None
+        self._pending: list[CoroutineType] = []
 
     @property
     def _clock(self) -> int:
         return round((_stdlib_time.monotonic() - self._epoch) * 1_000_000)
 
     def _spawn_pyasyncgen(self, coro) -> asyncio.Task | None:
+        # coro could be also a generator
+        if inspect.isgenerator(coro):
+            coro = _consume_pygen(coro)
+        if self._loop is None:
+            # Queue the coro so _run() can handle it when loop gets available.
+            self._pending.append(coro)
+            return None
         try:
             return asyncio.get_running_loop().create_task(coro)
         except RuntimeError:
@@ -177,6 +186,10 @@ class Runtime:
 
     def _spawn_pygen(self, gen) -> asyncio.Task | None:
         coro = _consume_pygen(gen)
+        if self._loop is None:
+            # Queue the coro so _run() can handle it when loop gets available.
+            self._pending.append(coro)
+            return None
         try:
             return asyncio.get_running_loop().create_task(coro)
         except RuntimeError:
@@ -268,6 +281,10 @@ class Runtime:
         self._loop = loop
         set_runtime(self)
         try:
+            # Handle coros queued before the event loop got available
+            for coro in self._pending:
+                loop.create_task(coro)
+            self._pending.clear()
 
             def _check_stop():
                 if self._stopping:
