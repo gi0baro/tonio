@@ -55,6 +55,8 @@ def _async_raise(tid: int, exc_type: type[BaseException]) -> None:
 if sys.platform == 'win32':
     import select as _select
 
+    _LOOP_FACTORY = asyncio.SelectorEventLoop
+
     # Windows needs proper filedescriptor checks
     def _check_fd_socket(fd: int, loop: asyncio.AbstractEventLoop) -> None:
         """Raise a clear error if `fd` is not a socket on Windows.
@@ -73,6 +75,8 @@ if sys.platform == 'win32':
                 f'FD {fd} is not a socket ({exc})'
             ) from exc
 else:
+    _LOOP_FACTORY = asyncio.new_event_loop
+
     def _check_fd_socket(fd: int, loop: asyncio.AbstractEventLoop) -> None:
         """Noop on platforms non-Windows
 
@@ -135,11 +139,10 @@ class BlockingTaskCtl:
 
 
 class Runtime:
-    """asyncio-backed runtime for Windows (tier-2 support).
+    """asyncio-based runtime, mainly for Windows support
 
-    This class provides the same low-level interface as the native
-    `_tonio.Runtime` so that `tonio._runtime.Runtime` (the shared
-    subclass) can work with either backend unchanged.
+    Provides the same low-level interface as the native `_tonio.Runtime`
+    so `tonio._runtime.Runtime` can subclass this instead of the Rust version.
     """
 
     def __init__(
@@ -168,7 +171,7 @@ class Runtime:
         try:
             return asyncio.get_running_loop().create_task(coro)
         except RuntimeError:
-            # Called from a non-async thread (like block_on from a ThreadPoolExecutor)
+            # Called from a non-async thread, maybe a block_on from a ThreadPoolExecutor
             asyncio.run_coroutine_threadsafe(coro, self._loop)
             return None
 
@@ -182,26 +185,19 @@ class Runtime:
 
     def _spawn_blocking(self, fn, *args, **kwargs) -> tuple[BlockingTaskCtl, Event, Result]:
         event = Event()
-        # Use size=2 to match the native backend ABI: index 0 = err flag, index 1 = value.
-        # This ensures res.fetch() always returns a 2-element list [err_flag, value],
-        # even on timeout (returns [None, None]), which _ctl.py's unpacking expects.
         result = Result(size=2)
 
-        # Capture the caller's context and run fn inside it on the executor
-        # thread. The native backend propagates context in Rust; the asyncio
-        # backend is self-contained here so no shared code has to change.
+        # Capture the caller's context to run fn inside an executor
         ctx = contextvars.copy_context()
 
-        # Create the ctl before the task so the executor thread can store its
-        # native thread ID into it via _set_tid().
+        # Allows the thread ID to be stored via _set_tid()
         ctl = BlockingTaskCtl(task=None)
 
         async def _run():
             loop = asyncio.get_running_loop()
             try:
-                # Wrap the function to capture the executor thread's native ID
-                # before running the actual payload.  This gives abort() the
-                # same best-effort thread-kill capability as the native backend.
+                # Store the thread ID before running the payload.
+                # so abort() may work across threads
                 def _wrapper():
                     ctl._set_tid(threading.get_ident())
                     return ctx.run(fn, *args, **kwargs)
@@ -219,11 +215,11 @@ class Runtime:
             task = asyncio.get_running_loop().create_task(_run())
             ctl._task = task
         except RuntimeError:
-            # Called from a non-async thread (e.g. block_on from a ThreadPoolExecutor worker)
+            # Called from a non-async thread, like block_on in a ThreadPoolExecutor
+            # Lets ctl._task = None as there is no asyncio task to cancel
             loop = self._loop
             if loop is not None:
                 asyncio.run_coroutine_threadsafe(_run(), loop)
-            # ctl._task stays None in this case (no asyncio task to cancel)
 
         return ctl, event, result
 
@@ -231,47 +227,43 @@ class Runtime:
         from ._events import _IOEvent
 
         loop = asyncio.get_running_loop()
-        _check_fd_socket(fd, loop)
+        _check_fd_socket(fd, loop)  # Needed guard on Windows
         event = _IOEvent(fd, loop.remove_reader)
 
-        def _fire():
+        def _teardown_guard():
             loop.remove_reader(fd)
             event.set()
 
-        loop.add_reader(fd, _fire)
+        loop.add_reader(fd, _teardown_guard)
         return event
 
     def _io_event_w(self, fd: int) -> Event:
         from ._events import _IOEvent
 
         loop = asyncio.get_running_loop()
-        _check_fd_socket(fd, loop)
+        _check_fd_socket(fd, loop)  # Needed guard on Windows
         event = _IOEvent(fd, loop.remove_writer)
 
-        def _fire():
+        def _teardown_guard():
             loop.remove_writer(fd)
             event.set()
 
-        loop.add_writer(fd, _fire)
+        loop.add_writer(fd, _teardown_guard)
         return event
 
     def _sig_add(self, sig: int) -> Event:
-        raise NotImplementedError('Signal handling is not available on the asyncio backend')
+        raise NotImplementedError('No signal handling availble on asyncio backend (yet)')
 
     def _sig_rem(self, sig: int) -> bool:
         return False
 
     def _run(self):
-        """Run the event loop until stop() is called (matches native _Runtime interface).
+        """Run the event loop until `stop()` is called
 
-        `_runtime.py`'s `Runtime.subclass` overrides `stop()` to only set
-        `self._stopping` (matching the native backend contract).  Since
-        `asyncio.loop.run_forever()` only exits on `loop.stop()`, we
-        schedule a periodic callback that polls `_stopping` and calls
-        `loop.stop()` when set.
+        As subclasses may override stop() to set self._stopping,
+        it should trigger asyncio' `loop.stop()` via a checking callback
         """
-        loop_factory = asyncio.SelectorEventLoop if sys.platform == 'win32' else asyncio.new_event_loop
-        loop = loop_factory()
+        loop = _LOOP_FACTORY()
         asyncio.set_event_loop(loop)
         self._loop = loop
         set_runtime(self)
@@ -283,6 +275,7 @@ class Runtime:
                 else:
                     loop.call_soon(_check_stop)
 
+            # Keep checking for the stop condition between other coro runs
             loop.call_soon(_check_stop)
             loop.run_forever()
         finally:
