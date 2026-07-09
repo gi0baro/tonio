@@ -182,8 +182,12 @@ class UnboundedChannelSender:
         self._channel = channel
 
     def send(self, message: Any):
-        self._channel._queue.append(message)
-        self._channel._recv_event.set()
+        channel = self._channel
+        if channel._closed:
+            raise BrokenPipeError()
+
+        channel._queue.append(message)
+        channel._recv_event.set()
 
     def close(self):
         self._channel._closed = True
