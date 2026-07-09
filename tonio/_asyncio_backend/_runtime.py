@@ -8,6 +8,7 @@ import inspect
 import sys
 import threading
 import time as _stdlib_time
+from collections import deque
 from types import CoroutineType
 from typing import Any
 
@@ -176,7 +177,7 @@ class Runtime:
         self._sig_wfd = -1
         self._epoch = _stdlib_time.monotonic()
         self._loop: asyncio.AbstractEventLoop = None
-        self._pending: list[CoroutineType] = []
+        self._pending: deque[CoroutineType] = deque()
         self._sig_events: dict[int, Event] = {}
         self._sig_reader_installed = False
 

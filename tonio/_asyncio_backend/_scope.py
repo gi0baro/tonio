@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 
 from ._events import Event
 
@@ -38,9 +39,9 @@ class _ScopeBase:
         self._exited = False
         self._task_count = 0
         self._done_event = Event()
-        self._task_done_events: list = []
+        self._task_done_events: deque = deque()
         self._cancelled = False
-        self._asyncio_tasks: list[asyncio.Task] = []
+        self._asyncio_tasks: deque[asyncio.Task] = deque()
 
     def _incr(self, val: int) -> bool:
         if val == 0:
