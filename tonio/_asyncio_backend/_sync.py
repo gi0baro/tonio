@@ -114,6 +114,8 @@ class ChannelSender:
 
     def _send(self, message: Any) -> Event:
         channel = self._channel
+        if channel._closed:
+            raise BrokenPipeError()
         event = Event()
         if len(channel._queue) < channel._size:
             channel._queue.append(message)
