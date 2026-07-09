@@ -269,6 +269,11 @@ class Runtime:
     def _sig_rem(self, sig: int) -> bool:
         return False
 
+    def _disarm_loop(self):
+        self._loop.close()
+        asyncio.set_event_loop(None)
+        self._loop = None
+
     def _run(self):
         """Run the event loop until `stop()` is called
 
@@ -296,12 +301,14 @@ class Runtime:
             loop.run_forever()
         finally:
             set_runtime(None)
-            loop.close()
-            asyncio.set_event_loop(None)
-            self._loop = None
+            self._disarm_loop()
 
-    def stop(self):
+    def _shutdown(self):
         self._stopping = True
         self._executor.shutdown(wait=False)
         if self._loop is not None:
             self._loop.stop()
+
+    def __del__(self):
+        # Shuts down self._executor:
+        self._shutdown()
