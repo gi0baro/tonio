@@ -19,7 +19,7 @@ class Scope(_Scope):
                 event.set()
 
         if wrapped_coro := self._track(wrapper):
-            task = get_runtime()._spawn_pyasyncgen(wrapped_coro)
+            task = get_runtime()._spawn_pygen(wrapped_coro)
             # The asyncio backend needs to track it for cancelation.
             # `task` is None on the native backend.
             if task:
