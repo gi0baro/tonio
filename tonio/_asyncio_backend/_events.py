@@ -25,16 +25,19 @@ class _Waiter:
             await asyncio.sleep(0)
             return
 
-        # resolves only if every event fires
-        tasks = [asyncio.ensure_future(ev.wait()) for ev in self._asyncio_events]
-        try:
-            await asyncio.wait(tasks, timeout=self._timeout, return_when=asyncio.ALL_COMPLETED)
-        finally:
-            # triggers even if this got canceled
-            for t in tasks:
-                if not t.done():
-                    t.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+        if len(self._asyncio_events) == 1:
+            coro = self._asyncio_events[0].wait()
+        else:
+            # resolves only if every event fires
+            coro = asyncio.gather(*(ev.wait() for ev in self._asyncio_events))
+
+        if self._timeout is None:
+            await coro
+        else:
+            try:
+                await asyncio.wait_for(coro, timeout=self._timeout)
+            except asyncio.TimeoutError:
+                pass
 
     def abort(self):
         pass
