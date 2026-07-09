@@ -36,10 +36,6 @@ class _Semaphore:
     def tokens(self) -> int:
         return self._value
 
-    def or_raise(self) -> SemaphoreCtx:
-        self.try_acquire()
-        return SemaphoreCtx(self)
-
 
 class SemaphoreCtx:
     __slots__ = ['_semaphore']
@@ -80,10 +76,6 @@ class _Lock(_Semaphore):
 
     def tokens(self) -> int:
         raise AttributeError("'_Lock' object has no attribute 'tokens'")
-
-    def or_raise(self) -> LockCtx:
-        self.try_acquire()
-        return LockCtx(self)
 
 
 class _Barrier:

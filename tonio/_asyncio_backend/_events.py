@@ -141,10 +141,6 @@ class Event:
     def waiter(self, timeout_us: int | None) -> _Waiter:
         return _Waiter([self._asyncio_event], timeout_us)
 
-    def wait(self, timeout: int | float | None = None) -> _Waiter:
-        timeout_us = round(max(0, timeout * 1_000_000)) if timeout is not None else None
-        return self.waiter(timeout_us)
-
 
 class _IOWaiter(_Waiter):
     """Like _Waiter but calls remove_fn(fd) on cancellation
