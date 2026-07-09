@@ -117,6 +117,20 @@ async def _consume_pygen(gen) -> Any:
                 return e.value
 
 
+async def _drain_tasks_untracked() -> None:
+    """Cancel and await any task still pending on the loop before it closes.
+
+    Needed because we have some fire-and-forget spawns
+    on `tonio.spawn.without_tracking`.
+    Prevents `RuntimeError('Event loop is closed')` from raise on cleanup
+    """
+    pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+    for task in pending:
+        task.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+
+
 class BlockingTaskCtl:
     __slots__ = ['_task', '_thread_id']
 
@@ -328,7 +342,10 @@ class Runtime:
         finally:
             self._disarm_signals()
             set_runtime(None)
-            self._disarm_loop()
+            try:
+                loop.run_until_complete(_drain_tasks_untracked())
+            finally:
+                self._disarm_loop()
 
     def _shutdown(self):
         self._stopping = True
