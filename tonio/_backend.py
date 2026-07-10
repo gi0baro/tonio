@@ -8,7 +8,7 @@ environment variable:
 - `asyncio`: Stdlib-based for every place where Rust module cannot compile
 - `auto`: `asyncio` on Windows, `native` on everything else.
 
-Setting `TONIO_BACKEND` to `native` or forces that backend even if
+Setting `TONIO_BACKEND` to `native` do forces that backend even if
 the modules are not available, even on Windows,
 not falling back to `asyncio` to mask not wrong assumptions about the backend.
 Then the ImportError should raise when tried.
@@ -23,7 +23,7 @@ import sys
 
 REQUESTED_BACKEND = os.environ.get('TONIO_BACKEND', 'auto')
 if REQUESTED_BACKEND not in ('auto', 'native', 'asyncio'):
-    raise RuntimeError(f"Invalid TONIO_BACKEND={REQUESTED_BACKEND!r}; expected 'auto', 'native', or 'asyncio'")
+    raise RuntimeError(f"Invalid TONIO_BACKEND={REQUESTED_BACKEND!r}. Expected 'auto', 'native' or 'asyncio'")
 
 BACKEND = REQUESTED_BACKEND
 if REQUESTED_BACKEND == 'auto':
@@ -91,3 +91,5 @@ elif BACKEND == 'native':
         get_runtime as get_runtime,
         set_runtime as set_runtime,
     )
+else:
+    raise RuntimeError(f"Invalid BACKEND={BACKEND!r}. Expected 'native' or 'asyncio'")
