@@ -49,7 +49,9 @@ def _async_raise(tid: int, exc_type: type[BaseException]) -> None:
     # 0 = thread not found
     # 1 = succeeded: one thread found and schedule to abort
     # >1 = unexpected state: more than one thread found??
-    if ret != 1:
+    if ret in (1, 0):
+        pass
+    else:
         # Clean up and continue.
         if ret > 1:
             _PyThreadState_SetAsyncExc(ctypes.c_ulong(tid), None)
