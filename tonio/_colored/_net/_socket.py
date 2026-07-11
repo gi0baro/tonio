@@ -6,7 +6,6 @@ import sys
 from typing import Any, Awaitable
 
 from ..._net import _socket
-from ..._tonio import get_runtime
 from .._ctl import spawn_blocking
 
 
@@ -47,17 +46,15 @@ class _Socket(_socket._Socket):
         )
 
     async def accept(self):
-        runtime = get_runtime()
-        fd = self.fileno()
-        event = runtime._io_event_r(fd)
-
         while True:
-            await event.waiter(None)
+            if (waiter := self._io_arm_r()) is not None:
+                await waiter
+                continue
 
             try:
                 conn, address = self._sock.accept()
             except BlockingIOError, InterruptedError:
-                event = runtime._io_event_r(fd)
+                self._io_clear_r()
                 continue
             except BaseException as exc:
                 raise exc
@@ -76,19 +73,17 @@ class _Socket(_socket._Socket):
         else:
             return
 
-        runtime = get_runtime()
-        fd = self.fileno()
-        event = runtime._io_event_w(fd)
-
         while True:
-            await event.waiter(None)
+            if (waiter := self._io_arm_w()) is not None:
+                await waiter
+                continue
 
             try:
                 err = self._sock.getsockopt(_stdlib_socket.SOL_SOCKET, _stdlib_socket.SO_ERROR)
                 if err != 0:
                     raise OSError(err, 'Connect call failed %s' % (address,))
             except BlockingIOError, InterruptedError:
-                event = runtime._io_event_w(fd)
+                self._io_clear_w()
                 continue
             except BaseException as exc:
                 raise exc
@@ -101,17 +96,15 @@ class _Socket(_socket._Socket):
         except BlockingIOError, InterruptedError:
             pass
 
-        runtime = get_runtime()
-        fd = self.fileno()
-        event = runtime._io_event_r(fd)
-
         while True:
-            await event.waiter(None)
+            if (waiter := self._io_arm_r()) is not None:
+                await waiter
+                continue
 
             try:
                 ret = self._sock.recv(bufsize, flags)
             except BlockingIOError, InterruptedError:
-                event = runtime._io_event_r(fd)
+                self._io_clear_r()
                 continue
             except BaseException as exc:
                 raise exc
@@ -126,17 +119,15 @@ class _Socket(_socket._Socket):
         except BlockingIOError, InterruptedError:
             pass
 
-        runtime = get_runtime()
-        fd = self.fileno()
-        event = runtime._io_event_r(fd)
-
         while True:
-            await event.waiter(None)
+            if (waiter := self._io_arm_r()) is not None:
+                await waiter
+                continue
 
             try:
                 ret = self._sock.recv_into(buffer, nbytes, flags)
             except BlockingIOError, InterruptedError:
-                event = runtime._io_event_r(fd)
+                self._io_clear_r()
                 continue
             except BaseException as exc:
                 raise exc
@@ -151,17 +142,15 @@ class _Socket(_socket._Socket):
         except BlockingIOError, InterruptedError:
             pass
 
-        runtime = get_runtime()
-        fd = self.fileno()
-        event = runtime._io_event_r(fd)
-
         while True:
-            await event.waiter(None)
+            if (waiter := self._io_arm_r()) is not None:
+                await waiter
+                continue
 
             try:
                 ret = self._sock.recvfrom(bufsize, flags)
             except BlockingIOError, InterruptedError:
-                event = runtime._io_event_r(fd)
+                self._io_clear_r()
                 continue
             except BaseException as exc:
                 raise exc
@@ -176,17 +165,15 @@ class _Socket(_socket._Socket):
         except BlockingIOError, InterruptedError:
             pass
 
-        runtime = get_runtime()
-        fd = self.fileno()
-        event = runtime._io_event_r(fd)
-
         while True:
-            await event.waiter(None)
+            if (waiter := self._io_arm_r()) is not None:
+                await waiter
+                continue
 
             try:
                 ret = self._sock.recvfrom_into(buffer, nbytes, flags)
             except BlockingIOError, InterruptedError:
-                event = runtime._io_event_r(fd)
+                self._io_clear_r()
                 continue
             except BaseException as exc:
                 raise exc
@@ -209,17 +196,15 @@ class _Socket(_socket._Socket):
             except BlockingIOError, InterruptedError:
                 pass
 
-            runtime = get_runtime()
-            fd = self.fileno()
-            event = runtime._io_event_r(fd)
-
             while True:
-                await event.waiter(None)
+                if (waiter := self._io_arm_r()) is not None:
+                    await waiter
+                    continue
 
                 try:
                     ret = self._sock.recvmsg(bufsize, ancbufsize, flags)
                 except BlockingIOError, InterruptedError:
-                    event = runtime._io_event_r(fd)
+                    self._io_clear_r()
                     continue
                 except BaseException as exc:
                     raise exc
@@ -240,16 +225,14 @@ class _Socket(_socket._Socket):
             except BlockingIOError, InterruptedError:
                 pass
 
-            runtime = get_runtime()
-            fd = self.fileno()
-            event = runtime._io_event_r(fd)
-
             while True:
-                await event.waiter(None)
+                if (waiter := self._io_arm_r()) is not None:
+                    await waiter
+                    continue
                 try:
                     ret = self._sock.recvmsg_into(buffers, ancbufsize, flags)
                 except BlockingIOError, InterruptedError:
-                    event = runtime._io_event_r(fd)
+                    self._io_clear_r()
                     continue
                 except BaseException as exc:
                     raise exc
@@ -267,17 +250,15 @@ class _Socket(_socket._Socket):
         except BlockingIOError, InterruptedError:
             pass
 
-        runtime = get_runtime()
-        fd = self.fileno()
-        event = runtime._io_event_w(fd)
-
         while True:
-            await event.waiter(None)
+            if (waiter := self._io_arm_w()) is not None:
+                await waiter
+                continue
 
             try:
                 ret = self._sock.send(data, flags)
             except BlockingIOError, InterruptedError:
-                event = runtime._io_event_w(fd)
+                self._io_clear_w()
                 continue
             except BaseException as exc:
                 raise exc
@@ -296,17 +277,15 @@ class _Socket(_socket._Socket):
         except BlockingIOError, InterruptedError:
             pass
 
-        runtime = get_runtime()
-        fd = self.fileno()
-        event = runtime._io_event_w(fd)
-
         while True:
-            await event.waiter(None)
+            if (waiter := self._io_arm_w()) is not None:
+                await waiter
+                continue
 
             try:
                 ret = self._sock.sendto(data, address)
             except BlockingIOError, InterruptedError:
-                event = runtime._io_event_w(fd)
+                self._io_clear_w()
                 continue
             except BaseException as exc:
                 raise exc
@@ -332,17 +311,15 @@ class _Socket(_socket._Socket):
             except BlockingIOError, InterruptedError:
                 pass
 
-            runtime = get_runtime()
-            fd = self.fileno()
-            event = runtime._io_event_w(fd)
-
             while True:
-                await event.waiter(None)
+                if (waiter := self._io_arm_w()) is not None:
+                    await waiter
+                    continue
 
                 try:
                     ret = self._sock.sendmsg(buffers, ancdata, flags, address)
                 except BlockingIOError, InterruptedError:
-                    event = runtime._io_event_w(fd)
+                    self._io_clear_w()
                     continue
                 except BaseException as exc:
                     raise exc

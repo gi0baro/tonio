@@ -1,6 +1,6 @@
 use std::{
     cell::Cell,
-    collections::{BinaryHeap, HashMap, VecDeque},
+    collections::BinaryHeap,
     io::Read,
     os::fd::FromRawFd,
     sync::{Arc, Condvar, Mutex, atomic},
@@ -8,7 +8,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-// use anyhow::Result;
 use crossbeam_deque::{Injector, Worker};
 use crossbeam_utils::sync::Parker;
 use mio::{Interest, Poll, Token, Waker, event};
@@ -17,35 +16,28 @@ use pyo3::prelude::*;
 use crate::{
     blocking::BlockingRunnerPool,
     handles::BoxedHandle,
-    io::Source,
+    io::{
+        TOKEN_SIGNALS, TOKEN_WAKER,
+        schedule::{ScheduledIO, readiness_from_event},
+        source::Source,
+    },
     // py::copy_context,
     time::Timer,
     work::{LOCAL_WORKER, WorkSchedule, work_loop},
 };
 
-type IOPyOp = (Token, Interest, Py<crate::events::Event>);
-
-enum IOHandle {
-    Py(PyHandleData),
-    Signals,
-}
-
-struct PyHandleData {
-    interest: Interest,
-    reader: Option<Py<crate::events::Event>>,
-    writer: Option<Py<crate::events::Event>>,
-}
-
 pub struct RuntimeState {
     buf: Box<[u8]>,
     io: Poll,
-    handles: HashMap<Token, IOHandle>,
     sig_sock: (socket2::Socket, socket2::Socket),
 }
 
 #[pyclass(frozen, subclass, module = "tonio._tonio")]
 pub struct Runtime {
-    io_ops: Mutex<VecDeque<IOPyOp>>,
+    io_registrations: papaya::HashMap<usize, Arc<ScheduledIO>>,
+    io_registry: arc_swap::ArcSwapOption<mio::Registry>,
+    io_pending_release: Mutex<Vec<Arc<ScheduledIO>>>,
+    io_needs_release: atomic::AtomicBool,
     waker: arc_swap::ArcSwapOption<Waker>,
     handles_sched: Mutex<BinaryHeap<Timer>>,
     blocking_pool: BlockingRunnerPool,
@@ -76,6 +68,15 @@ impl Runtime {
         state: &mut RuntimeState,
         events: &mut event::Events,
     ) -> std::result::Result<(), std::io::Error> {
+        //: release deregistered entries
+        //  NOTE: This is the only place `Arc`s are dropped, and it runs strictly between poll batches:
+        //        any token still in flight from the previous batch stayed valid through its dispatch,
+        //        the kernel deregistration happened before the entry was parked,
+        //        so no future batch can carry its token
+        if self.io_needs_release.swap(false, atomic::Ordering::AcqRel) {
+            self.io_pending_release.lock().unwrap().clear();
+        }
+
         //: get proper poll timeout
         let mut sched_time: Option<u64> = None;
         {
@@ -105,14 +106,25 @@ impl Runtime {
 
         //: handle events
         for event in events.iter() {
-            if let Some(io_handle) = state.handles.remove(&event.token()) {
-                match io_handle {
-                    IOHandle::Py(handle) => {
-                        if let Some(pyhandle) = self.handle_io_py(py, event, handle, state.io.registry()) {
-                            state.handles.insert(event.token(), IOHandle::Py(pyhandle));
-                        }
+            match event.token().0 {
+                TOKEN_WAKER => {}
+                TOKEN_SIGNALS => self.handle_io_signals(py, state),
+                token => {
+                    //: get the handler from the token and compute our readiness word from the event
+                    //  NOTE: the token is the exposed address of the Arc, kept alive at least until the release point
+                    //        at the top of the loop cycle. Only the poll cycle can free deregistrations,
+                    //        thus safety is guaranteed here.
+                    let io = unsafe { &*std::ptr::with_exposed_provenance::<ScheduledIO>(token) };
+                    let ready = readiness_from_event(event);
+                    io.set_readiness(ready);
+                    //: wake and schedule work
+                    let (reader, writer) = io.wake(ready);
+                    if let Some(ev) = reader {
+                        self.add_io_handle(Box::new(ev));
                     }
-                    IOHandle::Signals => self.handle_io_signals(py, event, state),
+                    if let Some(ev) = writer {
+                        self.add_io_handle(Box::new(ev));
+                    }
                 }
             }
         }
@@ -133,55 +145,41 @@ impl Runtime {
             }
         }
 
-        //: update registry from ops
-        {
-            let io_ops = self.io_ops.lock().unwrap();
-            Self::registry_update(state, io_ops);
-        }
-
         poll_result
     }
 
-    #[inline(always)]
-    fn registry_clean_from_token(registry: &mio::Registry, token: Token, interest: Option<Interest>) {
-        let mut source = Source::FD(token.0.try_into().unwrap());
-        _ = match interest {
-            Some(interest) => registry.reregister(&mut source, token, interest),
-            None => registry.deregister(&mut source),
-        };
+    pub(crate) fn io_register(&self, fd: i32) -> anyhow::Result<Arc<ScheduledIO>> {
+        let registry = self.io_registry.load_full().expect("runtime is not running");
+        let io = Arc::new(ScheduledIO::new(fd));
+        let token = Arc::as_ptr(&io).expose_provenance();
+        self.io_registrations.pin().insert(token, io.clone());
+        let mut source = Source::FD(fd);
+        if let Err(err) = registry.register(&mut source, Token(token), Interest::READABLE | Interest::WRITABLE) {
+            self.io_registrations.pin().remove(&token);
+            return Err(err.into());
+        }
+        Ok(io)
     }
 
-    #[inline(always)]
-    fn registry_update(state: &mut RuntimeState, mut ops: std::sync::MutexGuard<VecDeque<IOPyOp>>) {
-        while let Some((token, interest, event)) = ops.pop_front() {
-            if let Some(io_handle) = state.handles.get_mut(&token) {
-                let IOHandle::Py(data) = io_handle else { unreachable!() };
-                data.interest |= interest;
-                match interest {
-                    Interest::READABLE => data.reader = Some(event),
-                    Interest::WRITABLE => data.writer = Some(event),
-                    _ => unreachable!(),
-                }
-                let mut source = Source::FD(token.0.try_into().unwrap());
-                _ = state.io.registry().reregister(&mut source, token, data.interest);
-            } else {
-                let io_handle = match interest {
-                    Interest::READABLE => IOHandle::Py(PyHandleData {
-                        interest,
-                        reader: Some(event),
-                        writer: None,
-                    }),
-                    Interest::WRITABLE => IOHandle::Py(PyHandleData {
-                        interest,
-                        reader: None,
-                        writer: Some(event),
-                    }),
-                    _ => unreachable!(),
-                };
-                state.handles.insert(token, io_handle);
-                let mut source = Source::FD(token.0.try_into().unwrap());
-                _ = state.io.registry().register(&mut source, token, interest);
+    pub(crate) fn io_deregister(&self, io: &Arc<ScheduledIO>) {
+        let token = Arc::as_ptr(io).expose_provenance();
+        let regs = self.io_registrations.pin();
+        if let Some(io) = regs.remove(&token) {
+            if let Some(registry) = self.io_registry.load().as_ref() {
+                let mut source = Source::FD(io.fd);
+                _ = registry.deregister(&mut source);
             }
+            //: shutdown any leftofer work
+            let (reader, writer) = io.shutdown();
+            if let Some(ev) = reader {
+                self.add_io_handle(Box::new(ev));
+            }
+            if let Some(ev) = writer {
+                self.add_io_handle(Box::new(ev));
+            }
+            //: add to the release queue
+            self.io_pending_release.lock().unwrap().push(io.clone());
+            self.io_needs_release.store(true, atomic::Ordering::Release);
         }
     }
 
@@ -210,62 +208,7 @@ impl Runtime {
     }
 
     #[inline(always)]
-    fn handle_io_py(
-        &self,
-        py: Python,
-        event: &event::Event,
-        mut handle: PyHandleData,
-        registry: &mio::Registry,
-    ) -> Option<PyHandleData> {
-        match handle.interest {
-            Interest::READABLE => {
-                if event.is_readable() || event.is_read_closed() {
-                    Self::registry_clean_from_token(registry, event.token(), None);
-                    self.add_io_handle(Box::new(handle.reader.as_ref().unwrap().clone_ref(py)));
-                    return None;
-                }
-                Some(handle)
-            }
-            Interest::WRITABLE => {
-                if event.is_writable() || event.is_write_closed() {
-                    Self::registry_clean_from_token(registry, event.token(), None);
-                    self.add_io_handle(Box::new(handle.writer.as_ref().unwrap().clone_ref(py)));
-                    return None;
-                }
-                Some(handle)
-            }
-            _ => {
-                let readable = event.is_readable() || event.is_read_closed();
-                let writable = event.is_writable() || event.is_write_closed();
-                match (readable, writable) {
-                    (true, true) => {
-                        Self::registry_clean_from_token(registry, event.token(), None);
-                        self.add_io_handle(Box::new(handle.reader.as_ref().unwrap().clone_ref(py)));
-                        self.add_io_handle(Box::new(handle.writer.as_ref().unwrap().clone_ref(py)));
-                        None
-                    }
-                    (true, false) => {
-                        let reader = handle.reader.take().unwrap();
-                        handle.interest = Interest::WRITABLE;
-                        Self::registry_clean_from_token(registry, event.token(), Some(handle.interest));
-                        self.add_io_handle(Box::new(reader));
-                        Some(handle)
-                    }
-                    (false, true) => {
-                        let writer = handle.writer.take().unwrap();
-                        handle.interest = Interest::READABLE;
-                        Self::registry_clean_from_token(registry, event.token(), Some(handle.interest));
-                        self.add_io_handle(Box::new(writer));
-                        Some(handle)
-                    }
-                    _ => Some(handle),
-                }
-            }
-        }
-    }
-
-    #[inline(always)]
-    fn handle_io_signals(&self, py: Python, event: &event::Event, state: &mut RuntimeState) {
+    fn handle_io_signals(&self, py: Python, state: &mut RuntimeState) {
         let sock = &mut state.sig_sock.0;
         let read = self.read_from_sock(sock, &mut state.buf);
         if read > 0 && self.sig_listening.load(atomic::Ordering::Relaxed) {
@@ -276,14 +219,12 @@ impl Runtime {
                 }
             }
         }
-        state.handles.insert(event.token(), IOHandle::Signals);
     }
 
     fn init_sig_socket(
         &self,
         py: Python,
         registry: &mio::Registry,
-        handles: &mut HashMap<Token, IOHandle>,
     ) -> anyhow::Result<(socket2::Socket, socket2::Socket)> {
         let fdr: usize = self
             .ssock_r
@@ -304,12 +245,9 @@ impl Runtime {
             )
         };
 
-        let token = Token(fdr);
         let mut source = Source::FD(fdr.try_into()?);
-        let interest = Interest::READABLE;
 
-        handles.insert(token, IOHandle::Signals);
-        registry.register(&mut source, token, interest)?;
+        registry.register(&mut source, Token(TOKEN_SIGNALS), Interest::READABLE)?;
 
         Ok(socks)
     }
@@ -320,25 +258,32 @@ impl Runtime {
             .load()
             .call_method0(py, pyo3::intern!(py, "fileno"))?
             .extract(py)?;
-        let token = Token(fd);
-        if let Some(IOHandle::Signals) = state.handles.remove(&token) {
-            #[allow(clippy::cast_possible_wrap)]
-            let mut source = Source::FD(fd as i32);
-            state.io.registry().deregister(&mut source)?;
-        }
+        #[allow(clippy::cast_possible_wrap)]
+        let mut source = Source::FD(fd as i32);
+        state.io.registry().deregister(&mut source)?;
 
         Ok(())
     }
 
     fn cleanup_io(&self, state: &mut RuntimeState) {
-        let mut fds: Vec<Token> = state.handles.keys().copied().collect();
-        while let Some(token) = fds.pop() {
-            if let Some(IOHandle::Py(_)) = state.handles.remove(&token) {
-                #[allow(clippy::cast_possible_wrap)]
-                let mut source = Source::FD(token.0 as i32);
-                _ = state.io.registry().deregister(&mut source);
-            }
+        let regs = self.io_registrations.pin();
+        for (_, io) in &regs {
+            let mut source = Source::FD(io.fd);
+            _ = state.io.registry().deregister(&mut source);
+            _ = io.shutdown();
         }
+        regs.clear();
+        self.io_needs_release.store(false, atomic::Ordering::Release);
+        self.io_pending_release.lock().unwrap().clear();
+    }
+
+    fn teardown(&self, py: Python, state: &mut RuntimeState, threads_cvar: Arc<(Mutex<usize>, Condvar)>) {
+        _ = self.drop_sig_socket(py, state);
+        self.cleanup_io(state);
+        self.stop_threads(threads_cvar);
+        self.work_schedule.swap(None);
+        self.waker.swap(None);
+        self.io_registry.swap(None);
     }
 
     #[inline(always)]
@@ -402,7 +347,10 @@ impl Runtime {
         }
 
         Self {
-            io_ops: Mutex::new(VecDeque::with_capacity(16)),
+            io_registrations: papaya::HashMap::with_capacity(128),
+            io_registry: None.into(),
+            io_pending_release: Mutex::new(Vec::new()),
+            io_needs_release: atomic::AtomicBool::new(false),
             waker: None.into(),
             handles_sched: Mutex::new(BinaryHeap::with_capacity(32)),
             blocking_pool: BlockingRunnerPool::new(threads_blocking, threads_blocking_timeout),
@@ -549,32 +497,6 @@ impl Runtime {
         Ok((ctl, event, rh))
     }
 
-    #[pyo3(signature = (fd))]
-    fn _io_event_r(&self, py: Python, fd: usize) -> PyResult<Py<crate::events::Event>> {
-        let token = Token(fd);
-        let event = Py::new(py, crate::events::Event::new())?;
-        {
-            let mut ops = self.io_ops.lock().unwrap();
-            ops.push_back((token, Interest::READABLE, event.clone_ref(py)));
-        }
-
-        self.wake();
-        Ok(event)
-    }
-
-    #[pyo3(signature = (fd))]
-    fn _io_event_w(&self, py: Python, fd: usize) -> PyResult<Py<crate::events::Event>> {
-        let token = Token(fd);
-        let event = Py::new(py, crate::events::Event::new())?;
-        {
-            let mut ops = self.io_ops.lock().unwrap();
-            ops.push_back((token, Interest::WRITABLE, event.clone_ref(py)));
-        }
-
-        self.wake();
-        Ok(event)
-    }
-
     fn _sig_add(&self, py: Python, sig: u8) -> PyResult<Py<crate::events::Event>> {
         let event = Py::new(py, crate::events::Event::new())?;
         self.sig_handlers.pin().insert(sig, event.clone_ref(py));
@@ -587,18 +509,18 @@ impl Runtime {
 
     fn _run(pyself: Py<Self>, py: Python) -> PyResult<()> {
         let rself = pyself.get();
-        let mut handles = HashMap::with_capacity(128);
         let poll = Poll::new()?;
-        let waker = Waker::new(poll.registry(), Token(0))?;
-        let sig_sock = rself.init_sig_socket(py, poll.registry(), &mut handles)?;
+        let waker = Waker::new(poll.registry(), Token(TOKEN_WAKER))?;
+        let sig_sock = rself.init_sig_socket(py, poll.registry())?;
+        let registry = poll.registry().try_clone()?;
         let mut events = event::Events::with_capacity(128);
         let mut state = RuntimeState {
             buf: vec![0; 4096].into_boxed_slice(),
             io: poll,
-            handles,
             sig_sock,
         };
 
+        rself.io_registry.swap(Some(Arc::new(registry)));
         rself.waker.swap(Some(Arc::new(waker)));
 
         let n = rself.threads_cb;
@@ -639,16 +561,12 @@ impl Runtime {
                     }
                     break;
                 }
-                rself.stop_threads(threads_cb_cvar);
+                rself.teardown(py, &mut state, threads_cb_cvar);
                 return Err(err.into());
             }
         }
 
-        _ = rself.drop_sig_socket(py, &mut state);
-        rself.cleanup_io(&mut state);
-        rself.stop_threads(threads_cb_cvar);
-        rself.work_schedule.swap(None);
-        rself.waker.swap(None);
+        rself.teardown(py, &mut state, threads_cb_cvar);
         // rself.stopping.store(false, atomic::Ordering::Release);
         Ok(())
     }

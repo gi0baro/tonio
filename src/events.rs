@@ -103,7 +103,7 @@ pub(crate) struct Waiter {
 }
 
 impl Waiter {
-    fn from_event(py: Python, event: Py<Event>, timeout: Option<usize>) -> Py<Self> {
+    pub(crate) fn from_event(py: Python, event: Py<Event>, timeout: Option<usize>) -> Py<Self> {
         let slf = Self {
             registered: false.into(),
             aborted: Arc::new(false.into()),
