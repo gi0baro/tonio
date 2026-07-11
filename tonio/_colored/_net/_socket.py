@@ -78,15 +78,19 @@ class _Socket(_socket._Socket):
                 await waiter
                 continue
 
+            err = self._sock.getsockopt(_stdlib_socket.SOL_SOCKET, _stdlib_socket.SO_ERROR)
+            if err != 0:
+                raise OSError(err, 'Connect call failed %s' % (address,))
+
+            # NOTE: SO_ERROR == 0 does not imply completion: the registration
+            #       happens before `connect`, so stale pre-connect readiness
+            #       (e.g. EPOLLHUP|EPOLLOUT on Linux) can get us here while the
+            #       connect is still in progress
             try:
-                err = self._sock.getsockopt(_stdlib_socket.SOL_SOCKET, _stdlib_socket.SO_ERROR)
-                if err != 0:
-                    raise OSError(err, 'Connect call failed %s' % (address,))
-            except BlockingIOError, InterruptedError:
+                self._sock.getpeername()
+            except OSError:
                 self._io_clear_w()
                 continue
-            except BaseException as exc:
-                raise exc
             else:
                 break
 

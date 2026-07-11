@@ -12,9 +12,6 @@ const WRITE_CLOSED: usize = 0b00_1000;
 const ERROR: usize = 0b01_0000;
 const SHUTDOWN: usize = 0b10_0000;
 
-//: closed states are final, the kernel won't deliver further edges for them,
-//  so they must never be cleared (syscall returns EOF/error rather than EWOULDBLOCK)
-const CLOSED_MASK: usize = READ_CLOSED | WRITE_CLOSED;
 const TICK_SHIFT: u32 = 6;
 const TICK_MASK: usize = 0xff << TICK_SHIFT;
 
@@ -85,16 +82,20 @@ impl ScheduledIO {
         Ok(Some(event))
     }
 
+    // NOTE: closed states are cleared as well, since a genuinely closed direction never
+    //       returns EWOULDBLOCK (recv gives EOF/reset, send gives EPIPE).
+    //       A closed bit observed here is stale — epoll reports EPOLLHUP for fresh
+    //       unbound/unconnected sockets, which the eager registration captures —
+    //       and any future real close delivers a fresh edge regardless.
     #[inline]
     fn clear(&self, ready: usize, tick: u8) {
-        let mask = ready & !CLOSED_MASK;
         _ = self
             .readiness
             .fetch_update(atomic::Ordering::AcqRel, atomic::Ordering::Acquire, |curr| {
                 if tick_of(curr) != tick {
                     return None;
                 }
-                Some(curr & !mask)
+                Some(curr & !ready)
             });
     }
 
@@ -151,11 +152,11 @@ impl ScheduledIO {
     }
 
     pub(crate) fn clear_r(&self) {
-        self.clear(READABLE | ERROR, self.tick_r.load(atomic::Ordering::Acquire));
+        self.clear(READ_ALL, self.tick_r.load(atomic::Ordering::Acquire));
     }
 
     pub(crate) fn clear_w(&self) {
-        self.clear(WRITABLE | ERROR, self.tick_w.load(atomic::Ordering::Acquire));
+        self.clear(WRITE_ALL, self.tick_w.load(atomic::Ordering::Acquire));
     }
 }
 
