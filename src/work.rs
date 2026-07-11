@@ -44,16 +44,20 @@ impl WorkSchedule {
     }
 
     #[inline(always)]
-    fn clear_idle(&self, idx: usize) {
+    fn clear_idle(&self, idx: usize) -> bool {
         if self.idle_flags[idx]
             .compare_exchange(true, false, atomic::Ordering::AcqRel, atomic::Ordering::Relaxed)
             .is_ok()
         {
             self.idle_count.fetch_sub(1, atomic::Ordering::AcqRel);
+            return true;
         }
+        false
     }
 
-    //: wake one parked worker to scan for work, with throttling
+    //: wake one parked worker to scan for work, with throttling.
+    //  atomic order preservation is guaranteed by crossbeam-deque
+    //  publish being SeqCst RMW.
     pub fn unpark_one(&self) {
         if self.idle_count.load(atomic::Ordering::Acquire) == 0 {
             return;
@@ -68,6 +72,7 @@ impl WorkSchedule {
         self.wake_idle();
     }
 
+    //: "forcefully" a parked worker regardless of "speculation" state.
     pub fn unpark(&self) {
         if self.idle_count.load(atomic::Ordering::Acquire) == 0 {
             return;
@@ -167,7 +172,11 @@ pub(crate) fn work_loop(
             //: nothing to run: advertise as idle and re-scan
             scheduler.set_idle(idx);
             if let Some(handle) = find_work(&worker, &rself.work_injector, &scheduler.stealers, idx) {
-                scheduler.clear_idle(idx);
+                if !scheduler.clear_idle(idx) {
+                    //: a producer claimed our idle flag while we were scanning:
+                    //  absorb the speculation token here
+                    scheduler.speculation.fetch_sub(1, atomic::Ordering::AcqRel);
+                }
                 if is_speculating {
                     is_speculating = false;
                     if scheduler.speculation.fetch_sub(1, atomic::Ordering::AcqRel) == 1 {
@@ -185,21 +194,36 @@ pub(crate) fn work_loop(
                 break;
             }
 
-            //: stop speculating and park
+            //: stop speculating and park, unless a final scan find work
             if is_speculating {
+                is_speculating = false;
                 scheduler.speculation.fetch_sub(1, atomic::Ordering::AcqRel);
+                //: calls into `unpark_one` elide wakes while our search is active.
+                //  A handle pushed during our last scan would be stranded, thus
+                //  we need to re-scan after we released the token and actually park.
+                if let Some(handle) = find_work(&worker, &rself.work_injector, &scheduler.stealers, idx) {
+                    if !scheduler.clear_idle(idx) {
+                        //: as before, absorb the speculation token if the flag was claimed
+                        scheduler.speculation.fetch_sub(1, atomic::Ordering::AcqRel);
+                    }
+                    handle.run(py, &runtime, &mut state);
+                    continue;
+                }
             }
             parker = py.detach(move || {
                 parker.park();
                 parker
             });
 
-            //: unparked
-            scheduler.clear_idle(idx);
+            //: if we cleared our own idle flag, no producer claimed
+            //  us this cycle: the park returned on a stale token left over from
+            //  a cycle where we found work without parking, and thus there's no
+            //  speculation involved.
+            let claimed = !scheduler.clear_idle(idx);
             if rself.work_stopping.load(atomic::Ordering::Acquire) {
                 break;
             }
-            is_speculating = true;
+            is_speculating = claimed;
         }
 
         LOCAL_WORKER.with(|c| c.set(std::ptr::null()));
