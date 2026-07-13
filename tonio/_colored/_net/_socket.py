@@ -5,7 +5,6 @@ import socket as _stdlib_socket
 import sys
 from typing import Any, Awaitable
 
-from ..._backend import get_runtime
 from ..._net import _socket
 from .._ctl import spawn_blocking
 
