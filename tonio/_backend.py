@@ -28,9 +28,9 @@ if _requested_use_native not in (None, 'true', 'yes', '1', 'false', 'no', '0'):
 _using_native: bool = _requested_use_native
 if _requested_use_native is None:
     if sys.platform == 'win32':
-        _using_native = True
-    else:
         _using_native = False
+    else:
+        _using_native = True
 elif _requested_use_native in ('true', 'yet', '1'):
     _using_native = True
 else:
