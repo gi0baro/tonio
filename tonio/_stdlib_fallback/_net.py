@@ -31,6 +31,7 @@ class Socket:
     """
 
     def __init__(self, stdlib_socket: _stdlib_socket.socket):
+        stdlib_socket.setblocking(False)
         self._sock = stdlib_socket
         self._eof = False
 
