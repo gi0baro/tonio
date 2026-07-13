@@ -26,12 +26,14 @@ from .exceptions import (
 
 
 __all__ = [
+    'Barrier',
     'BlockingTaskCtl',
     'CancelledError',
     'Channel',
     'ChannelReceiver',
     'ChannelSender',
     'Event',
+    'Lock',
     'LockCtx',
     'PyAsyncGenScope',
     'PyGenScope',
@@ -40,6 +42,7 @@ __all__ = [
     'Runtime',
     'RuntimeAlreadyInitializedError',
     'RuntimeNotInitializedError',
+    'Semaphore',
     'SemaphoreCtx',
     'Socket',
     'TLSStream',
@@ -49,9 +52,6 @@ __all__ = [
     'UnboundedChannelSender',
     'Waiter',
     'WouldBlock',
-    '_Barrier',
-    '_Lock',
-    '_Semaphore',
     'get_runtime',
     'set_runtime',
 ]
