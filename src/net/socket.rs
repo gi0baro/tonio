@@ -38,12 +38,14 @@ impl Socket {
         self._eof.store(true, atomic::Ordering::Release);
     }
 
-    fn _io_arm_r(&self, py: Python) -> PyResult<Option<Py<Waiter>>> {
-        self.io.arm_r(py, None)
+    #[pyo3(signature = (timeout=None))]
+    fn _io_arm_r(&self, py: Python, timeout: Option<usize>) -> PyResult<Option<Py<Waiter>>> {
+        self.io.arm_r(py, timeout)
     }
 
-    fn _io_arm_w(&self, py: Python) -> PyResult<Option<Py<Waiter>>> {
-        self.io.arm_w(py, None)
+    #[pyo3(signature = (timeout=None))]
+    fn _io_arm_w(&self, py: Python, timeout: Option<usize>) -> PyResult<Option<Py<Waiter>>> {
+        self.io.arm_w(py, timeout)
     }
 
     fn _io_clear_r(&self) {
