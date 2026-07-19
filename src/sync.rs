@@ -222,38 +222,28 @@ struct Channel {
     size: usize,
     len: atomic::AtomicUsize,
     state: Mutex<ChannelState>,
-    tx: (atomic::AtomicUsize, papaya::HashSet<usize>),
-    rx: (atomic::AtomicUsize, papaya::HashSet<usize>),
+    tx: atomic::AtomicUsize,
+    rx: atomic::AtomicUsize,
     closed: atomic::AtomicBool,
 }
 
 impl Channel {
-    fn tx_add(&self) -> usize {
-        let idx = self.tx.0.fetch_add(1, atomic::Ordering::Relaxed);
-        let tx = self.tx.1.pin();
-        tx.insert(idx);
-        idx
+    fn tx_add(&self) {
+        self.tx.fetch_add(1, atomic::Ordering::Relaxed);
     }
 
-    fn rx_add(&self) -> usize {
-        let idx = self.rx.0.fetch_add(1, atomic::Ordering::Relaxed);
-        let rx = self.rx.1.pin();
-        rx.insert(idx);
-        idx
+    fn rx_add(&self) {
+        self.rx.fetch_add(1, atomic::Ordering::Relaxed);
     }
 
-    fn tx_rem(&self, py: Python, idx: usize) {
-        let tx = self.tx.1.pin();
-        tx.remove(&idx);
-        if tx.is_empty() {
+    fn tx_rem(&self, py: Python) {
+        if self.tx.fetch_sub(1, atomic::Ordering::AcqRel) == 1 {
             self.close(py);
         }
     }
 
-    fn rx_rem(&self, py: Python, idx: usize) {
-        let rx = self.rx.1.pin();
-        rx.remove(&idx);
-        if rx.is_empty() {
+    fn rx_rem(&self, py: Python) {
+        if self.rx.fetch_sub(1, atomic::Ordering::AcqRel) == 1 {
             self.close(py);
         }
     }
@@ -330,38 +320,28 @@ struct UnboundedChannelState {
 
 struct UnboundedChannel {
     state: Mutex<UnboundedChannelState>,
-    tx: (atomic::AtomicUsize, papaya::HashSet<usize>),
-    rx: (atomic::AtomicUsize, papaya::HashSet<usize>),
+    tx: atomic::AtomicUsize,
+    rx: atomic::AtomicUsize,
     closed: atomic::AtomicBool,
 }
 
 impl UnboundedChannel {
-    fn tx_add(&self) -> usize {
-        let idx = self.tx.0.fetch_add(1, atomic::Ordering::Relaxed);
-        let tx = self.tx.1.pin();
-        tx.insert(idx);
-        idx
+    fn tx_add(&self) {
+        self.tx.fetch_add(1, atomic::Ordering::Relaxed);
     }
 
-    fn rx_add(&self) -> usize {
-        let idx = self.rx.0.fetch_add(1, atomic::Ordering::Relaxed);
-        let rx = self.rx.1.pin();
-        rx.insert(idx);
-        idx
+    fn rx_add(&self) {
+        self.rx.fetch_add(1, atomic::Ordering::Relaxed);
     }
 
-    fn tx_rem(&self, py: Python, idx: usize) {
-        let tx = self.tx.1.pin();
-        tx.remove(&idx);
-        if tx.is_empty() {
+    fn tx_rem(&self, py: Python) {
+        if self.tx.fetch_sub(1, atomic::Ordering::AcqRel) == 1 {
             self.close(py);
         }
     }
 
-    fn rx_rem(&self, py: Python, idx: usize) {
-        let rx = self.rx.1.pin();
-        rx.remove(&idx);
-        if rx.is_empty() {
+    fn rx_rem(&self, py: Python) {
+        if self.rx.fetch_sub(1, atomic::Ordering::AcqRel) == 1 {
             self.close(py);
         }
     }
@@ -437,8 +417,8 @@ impl PyChannel {
                     queue: VecDeque::new(),
                     waiters: VecDeque::new(),
                 }),
-                tx: (0.into(), papaya::HashSet::new()),
-                rx: (0.into(), papaya::HashSet::new()),
+                tx: 0.into(),
+                rx: 0.into(),
                 closed: false.into(),
             }),
         }
@@ -460,8 +440,8 @@ impl PyUnboundedChannel {
                     queue: VecDeque::new(),
                     waiters: VecDeque::new(),
                 }),
-                tx: (0.into(), papaya::HashSet::new()),
-                rx: (0.into(), papaya::HashSet::new()),
+                tx: 0.into(),
+                rx: 0.into(),
                 closed: false.into(),
             }),
         }
@@ -471,7 +451,6 @@ impl PyUnboundedChannel {
 #[pyclass(frozen, subclass, module = "tonio._tonio")]
 struct ChannelSender {
     channel: Arc<Channel>,
-    id: usize,
 }
 
 #[pymethods]
@@ -479,11 +458,8 @@ impl ChannelSender {
     #[new]
     fn new(channel: Py<PyChannel>) -> Self {
         let inner = &channel.get().inner;
-        let id = inner.tx_add();
-        Self {
-            channel: inner.clone(),
-            id,
-        }
+        inner.tx_add();
+        Self { channel: inner.clone() }
     }
 
     // TODO: clone
@@ -502,14 +478,13 @@ impl ChannelSender {
 
 impl Drop for ChannelSender {
     fn drop(&mut self) {
-        Python::attach(|py| self.channel.tx_rem(py, self.id));
+        Python::attach(|py| self.channel.tx_rem(py));
     }
 }
 
 #[pyclass(frozen, subclass, module = "tonio._tonio")]
 struct ChannelReceiver {
     channel: Arc<Channel>,
-    id: usize,
 }
 
 #[pymethods]
@@ -517,11 +492,8 @@ impl ChannelReceiver {
     #[new]
     fn new(channel: Py<PyChannel>) -> Self {
         let inner = &channel.get().inner;
-        let id = inner.rx_add();
-        Self {
-            channel: channel.get().inner.clone(),
-            id,
-        }
+        inner.rx_add();
+        Self { channel: inner.clone() }
     }
 
     // TODO: clone
@@ -537,14 +509,13 @@ impl ChannelReceiver {
 
 impl Drop for ChannelReceiver {
     fn drop(&mut self) {
-        Python::attach(|py| self.channel.rx_rem(py, self.id));
+        Python::attach(|py| self.channel.rx_rem(py));
     }
 }
 
 #[pyclass(frozen, subclass, module = "tonio._tonio")]
 struct UnboundedChannelSender {
     channel: Arc<UnboundedChannel>,
-    id: usize,
 }
 
 #[pymethods]
@@ -552,11 +523,8 @@ impl UnboundedChannelSender {
     #[new]
     fn new(channel: Py<PyUnboundedChannel>) -> Self {
         let inner = &channel.get().inner;
-        let id = inner.tx_add();
-        Self {
-            channel: inner.clone(),
-            id,
-        }
+        inner.tx_add();
+        Self { channel: inner.clone() }
     }
 
     // TODO: clone
@@ -576,14 +544,13 @@ impl UnboundedChannelSender {
 
 impl Drop for UnboundedChannelSender {
     fn drop(&mut self) {
-        Python::attach(|py| self.channel.tx_rem(py, self.id));
+        Python::attach(|py| self.channel.tx_rem(py));
     }
 }
 
 #[pyclass(frozen, subclass, module = "tonio._tonio")]
 struct UnboundedChannelReceiver {
     channel: Arc<UnboundedChannel>,
-    id: usize,
 }
 
 #[pymethods]
@@ -591,11 +558,8 @@ impl UnboundedChannelReceiver {
     #[new]
     fn new(channel: Py<PyUnboundedChannel>) -> Self {
         let inner = &channel.get().inner;
-        let id = inner.rx_add();
-        Self {
-            channel: inner.clone(),
-            id,
-        }
+        inner.rx_add();
+        Self { channel: inner.clone() }
     }
 
     // TODO: clone
@@ -611,7 +575,7 @@ impl UnboundedChannelReceiver {
 
 impl Drop for UnboundedChannelReceiver {
     fn drop(&mut self) {
-        Python::attach(|py| self.channel.rx_rem(py, self.id));
+        Python::attach(|py| self.channel.rx_rem(py));
     }
 }
 
