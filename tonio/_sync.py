@@ -52,7 +52,8 @@ class Barrier(_Barrier):
 
 class ChannelSender(_ChannelSender):
     def send(self, message) -> Coro[None]:
-        yield self._send(message).waiter(None)
+        if (event := self._send(message)) is not None:
+            yield event.waiter(None)
 
 
 class ChannelReceiver(_ChannelReceiver):
