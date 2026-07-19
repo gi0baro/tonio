@@ -137,6 +137,32 @@ def one_million():
     return results
 
 
+def _filter_chan_results(results):
+    # per scenario, take the median run
+    out = {}
+    for key in results[0].keys():
+        vals = sorted(r[key] for r in results)
+        out[key] = vals[len(vals) // 2]
+    return out
+
+
+def chan():
+    results = []
+    impls = [
+        ('TonIO yield', 'tonio_yi', {}),
+        ('TonIO async', 'tonio_aw', {}),
+        ('TonIO yield (4 threads)', 'tonio_yi', {'threads': '4'}),
+        ('TonIO async (4 threads)', 'tonio_aw', {'threads': '4'}),
+        ('AsyncIO', 'std', {}),
+        ('Trio', 'trio', {}),
+    ]
+    for label, impl, extras in impls:
+        res = script_benchmark('chan', impl, **extras)
+        if res:
+            results.append((label, _filter_chan_results(res)))
+    return results
+
+
 def net_sock():
     results = []
     impls = [
@@ -185,6 +211,7 @@ def _tonio_version():
 def run():
     all_benchmarks = {
         '1m': one_million,
+        'chan': chan,
         'net_sock': net_sock,
         'concurrency': concurrency,
     }
