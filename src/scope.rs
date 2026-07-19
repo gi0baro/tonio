@@ -25,12 +25,12 @@ impl PyGenScope {
 
     fn _incr(&self, from: u8) -> bool {
         self.consumed
-            .compare_exchange(from, from + 1, atomic::Ordering::Release, atomic::Ordering::Relaxed)
+            .compare_exchange(from, from + 1, atomic::Ordering::Relaxed, atomic::Ordering::Relaxed)
             .is_ok()
     }
 
     fn _track(&self, pygen: Bound<PyAny>) -> PyResult<Py<PyAny>> {
-        if self.consumed.load(atomic::Ordering::Acquire) > 1 {
+        if self.consumed.load(atomic::Ordering::Relaxed) > 1 {
             return Ok(pygen.py().None());
         }
         let py = pygen.py();
@@ -95,12 +95,12 @@ impl PyAsyncGenScope {
 
     fn _incr(&self, from: u8) -> bool {
         self.consumed
-            .compare_exchange(from, from + 1, atomic::Ordering::Release, atomic::Ordering::Relaxed)
+            .compare_exchange(from, from + 1, atomic::Ordering::Relaxed, atomic::Ordering::Relaxed)
             .is_ok()
     }
 
     fn _track(&self, pygen: Bound<PyAny>) -> PyResult<Py<PyAny>> {
-        if self.consumed.load(atomic::Ordering::Acquire) > 1 {
+        if self.consumed.load(atomic::Ordering::Relaxed) > 1 {
             return Ok(pygen.py().None());
         }
         let py = pygen.py();

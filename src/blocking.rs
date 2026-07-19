@@ -121,8 +121,8 @@ impl BlockingRunnerPool {
 
     #[inline(always)]
     fn spawn_thread(&self) {
-        if self.threads.fetch_add(1, atomic::Ordering::Release) >= self.tmax {
-            self.threads.fetch_sub(1, atomic::Ordering::Release);
+        if self.threads.fetch_add(1, atomic::Ordering::Relaxed) >= self.tmax {
+            self.threads.fetch_sub(1, atomic::Ordering::Relaxed);
             return;
         }
 
@@ -135,9 +135,9 @@ impl BlockingRunnerPool {
 
     #[inline]
     pub fn run(&self, task: BlockingTask) -> Result<(), channel::SendError<BlockingTask>> {
-        let threads = self.threads.load(atomic::Ordering::Acquire);
         self.queue.send(task)?;
-        if self.load.fetch_add(1, atomic::Ordering::Release) >= 0 && threads < self.tmax {
+        let threads = self.threads.load(atomic::Ordering::SeqCst);
+        if self.load.fetch_add(1, atomic::Ordering::Relaxed) >= 0 && threads < self.tmax {
             self.spawn_thread();
         }
         Ok(())
@@ -152,11 +152,15 @@ fn blocking_worker(
 ) {
     Python::attach(|py| {
         while let Ok(task) = py.detach(|| {
-            load.fetch_sub(1, atomic::Ordering::Release);
-            let res = queue.recv_timeout(timeout);
-            load.fetch_add(1, atomic::Ordering::Release);
+            load.fetch_sub(1, atomic::Ordering::Relaxed);
+            let mut res = queue.recv_timeout(timeout);
+            load.fetch_add(1, atomic::Ordering::Relaxed);
             if res.is_err() {
-                tcount.fetch_sub(1, atomic::Ordering::Release);
+                tcount.fetch_sub(1, atomic::Ordering::SeqCst);
+                if let Ok(task) = queue.try_recv() {
+                    tcount.fetch_add(1, atomic::Ordering::SeqCst);
+                    res = Ok(task);
+                }
             }
             res
         }) {

@@ -162,7 +162,7 @@ impl Waiter {
         let rself = pyself.get();
         if rself
             .registered
-            .compare_exchange(false, true, atomic::Ordering::Release, atomic::Ordering::Relaxed)
+            .compare_exchange(false, true, atomic::Ordering::Relaxed, atomic::Ordering::Relaxed)
             .is_ok()
         {
             if rself.events.is_empty() {
@@ -219,7 +219,7 @@ impl Waiter {
         let rself = pyself.get();
         if rself
             .registered
-            .compare_exchange(false, true, atomic::Ordering::Release, atomic::Ordering::Relaxed)
+            .compare_exchange(false, true, atomic::Ordering::Relaxed, atomic::Ordering::Relaxed)
             .is_ok()
         {
             let sentinel = rself.build_sentinel(py);
@@ -316,7 +316,7 @@ impl Waiter {
     }
 
     fn __next__(pyself: Py<Self>) -> Option<Py<Self>> {
-        match pyself.get().registered.load(atomic::Ordering::Acquire) {
+        match pyself.get().registered.load(atomic::Ordering::Relaxed) {
             false => Some(pyself),
             true => None,
         }
@@ -589,7 +589,7 @@ impl PyGenSuspension {
         }
         if self
             .consumed
-            .compare_exchange(false, true, atomic::Ordering::Release, atomic::Ordering::Relaxed)
+            .compare_exchange(false, true, atomic::Ordering::Relaxed, atomic::Ordering::Relaxed)
             .is_ok()
         {
             runtime.add_handle(self.to_handle(py, value));
@@ -606,7 +606,7 @@ impl PyGenSuspension {
         }
         if self
             .consumed
-            .compare_exchange(false, true, atomic::Ordering::Release, atomic::Ordering::Relaxed)
+            .compare_exchange(false, true, atomic::Ordering::Relaxed, atomic::Ordering::Relaxed)
             .is_ok()
         {
             runtime.add_handle(self.to_throw_handle(py, value));
@@ -710,7 +710,7 @@ impl PyAsyncGenSuspension {
         }
         if self
             .consumed
-            .compare_exchange(false, true, atomic::Ordering::Release, atomic::Ordering::Relaxed)
+            .compare_exchange(false, true, atomic::Ordering::Relaxed, atomic::Ordering::Relaxed)
             .is_ok()
         {
             runtime.add_handle(self.to_handle(py, value));
@@ -727,7 +727,7 @@ impl PyAsyncGenSuspension {
         }
         if self
             .consumed
-            .compare_exchange(false, true, atomic::Ordering::Release, atomic::Ordering::Relaxed)
+            .compare_exchange(false, true, atomic::Ordering::Relaxed, atomic::Ordering::Relaxed)
             .is_ok()
         {
             runtime.add_handle(self.to_throw_handle(py, value));
@@ -755,13 +755,13 @@ impl Sentinel {
     }
 
     fn increment(&self) {
-        self.counter.fetch_add(1, atomic::Ordering::Release);
+        self.counter.fetch_add(1, atomic::Ordering::Relaxed);
     }
 
     fn decrement(&self, py: Python, result: (usize, Py<PyAny>)) -> Option<Py<PyAny>> {
-        let prev = self.counter.fetch_sub(1, atomic::Ordering::Release);
+        let prev = self.counter.fetch_sub(1, atomic::Ordering::Relaxed);
         if prev == 0 {
-            self.counter.fetch_add(1, atomic::Ordering::Release);
+            self.counter.fetch_add(1, atomic::Ordering::Relaxed);
             return None;
         }
         if prev >= 1 {
@@ -774,13 +774,7 @@ impl Sentinel {
     }
 
     fn consume(&self) -> bool {
-        match self.counter.load(atomic::Ordering::Acquire) {
-            0 => false,
-            _ => {
-                self.counter.store(0, atomic::Ordering::Release);
-                true
-            }
-        }
+        self.counter.swap(0, atomic::Ordering::AcqRel) != 0
     }
 }
 

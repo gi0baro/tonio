@@ -73,7 +73,7 @@ impl Runtime {
         //        any token still in flight from the previous batch stayed valid through its dispatch,
         //        the kernel deregistration happened before the entry was parked,
         //        so no future batch can carry its token
-        if self.io_needs_release.swap(false, atomic::Ordering::AcqRel) {
+        if self.io_needs_release.swap(false, atomic::Ordering::Acquire) {
             self.io_pending_release.lock().unwrap().clear();
         }
 

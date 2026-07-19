@@ -25,7 +25,7 @@ impl Lock {
     fn acquire(&self, py: Python) -> Option<Py<Event>> {
         if self
             .state
-            .compare_exchange(false, true, atomic::Ordering::Release, atomic::Ordering::Relaxed)
+            .compare_exchange(false, true, atomic::Ordering::Acquire, atomic::Ordering::Relaxed)
             .is_err()
         {
             let mut events = self.waiters.lock().unwrap();
@@ -39,7 +39,7 @@ impl Lock {
     fn try_acquire(&self) -> PyResult<()> {
         if self
             .state
-            .compare_exchange(false, true, atomic::Ordering::Release, atomic::Ordering::Relaxed)
+            .compare_exchange(false, true, atomic::Ordering::Acquire, atomic::Ordering::Relaxed)
             .is_err()
         {
             return Err(crate::errors::WouldBlock::new_err("Cannot acquire lock"));
@@ -131,7 +131,7 @@ impl Barrier {
     }
 
     fn ack(&self, py: Python) -> usize {
-        let count = self.count.fetch_add(1, atomic::Ordering::Release);
+        let count = self.count.fetch_add(1, atomic::Ordering::AcqRel);
         if (count + 1) >= self.value {
             self._event.get().set(py);
         }
@@ -139,7 +139,7 @@ impl Barrier {
     }
 
     fn value(&self) -> usize {
-        self.count.load(atomic::Ordering::Acquire)
+        self.count.load(atomic::Ordering::Relaxed)
     }
 }
 
@@ -162,7 +162,7 @@ impl LockCtx {
     fn __enter__(&self) -> PyResult<()> {
         if self
             .consumed
-            .compare_exchange(false, true, atomic::Ordering::Release, atomic::Ordering::Relaxed)
+            .compare_exchange(false, true, atomic::Ordering::Relaxed, atomic::Ordering::Relaxed)
             .is_err()
         {
             return Err(pyo3::exceptions::PyRuntimeError::new_err(
@@ -197,7 +197,7 @@ impl SemaphoreCtx {
     fn __enter__(&self) -> PyResult<()> {
         if self
             .consumed
-            .compare_exchange(false, true, atomic::Ordering::Release, atomic::Ordering::Relaxed)
+            .compare_exchange(false, true, atomic::Ordering::Relaxed, atomic::Ordering::Relaxed)
             .is_err()
         {
             return Err(pyo3::exceptions::PyRuntimeError::new_err(
@@ -225,14 +225,14 @@ struct Channel {
 
 impl Channel {
     fn tx_add(&self) -> usize {
-        let idx = self.tx.0.fetch_add(1, atomic::Ordering::Release);
+        let idx = self.tx.0.fetch_add(1, atomic::Ordering::Relaxed);
         let tx = self.tx.1.pin();
         tx.insert(idx);
         idx
     }
 
     fn rx_add(&self) -> usize {
-        let idx = self.rx.0.fetch_add(1, atomic::Ordering::Release);
+        let idx = self.rx.0.fetch_add(1, atomic::Ordering::Relaxed);
         let rx = self.rx.1.pin();
         rx.insert(idx);
         idx
@@ -271,7 +271,7 @@ impl Channel {
 
     fn push(&self, py: Python, message: Py<PyAny>) -> Py<Event> {
         let want_pull = Py::new(py, Event::new()).unwrap();
-        let len = self.len.fetch_add(1, atomic::Ordering::SeqCst);
+        let len = self.len.fetch_add(1, atomic::Ordering::Relaxed);
         if len < self.size {
             want_pull.get().set(py);
         }
@@ -289,22 +289,31 @@ impl Channel {
     }
 
     fn pull(&self, py: Python) -> (Py<Event>, Option<Py<PyAny>>) {
-        let want_push = Py::new(py, Event::new()).unwrap();
-        if let Some((message, want_pull)) = {
-            match self.tx_queue.try_lock() {
-                Ok(mut tx) => tx.pop_front(),
-                _ => None,
-            }
-        } {
-            self.len.fetch_sub(1, atomic::Ordering::SeqCst);
-            want_push.get().set(py);
-            want_pull.get().set(py);
-            return (want_push, Some(message));
+        macro_rules! try_pull {
+            ($want_push:ident) => {
+                if let Some((message, want_pull)) = {
+                    match self.tx_queue.try_lock() {
+                        Ok(mut tx) => tx.pop_front(),
+                        _ => None,
+                    }
+                } {
+                    self.len.fetch_sub(1, atomic::Ordering::Relaxed);
+                    $want_push.get().set(py);
+                    want_pull.get().set(py);
+                    return ($want_push, Some(message));
+                }
+            };
         }
-        if self.closed.load(atomic::Ordering::SeqCst) {
+
+        let want_push = Py::new(py, Event::new()).unwrap();
+        //: fast path
+        try_pull!(want_push);
+        //: miss path, recheck `tx_queue` while holding `rx_queue` lock
+        let mut rx = self.rx_queue.lock().unwrap();
+        try_pull!(want_push);
+        if self.closed.load(atomic::Ordering::Acquire) {
             want_push.get().set(py);
         } else {
-            let mut rx = self.rx_queue.lock().unwrap();
             rx.push_back(want_push.clone_ref(py));
         }
         (want_push, None)
@@ -321,14 +330,14 @@ struct UnboundedChannel {
 
 impl UnboundedChannel {
     fn tx_add(&self) -> usize {
-        let idx = self.tx.0.fetch_add(1, atomic::Ordering::Release);
+        let idx = self.tx.0.fetch_add(1, atomic::Ordering::Relaxed);
         let tx = self.tx.1.pin();
         tx.insert(idx);
         idx
     }
 
     fn rx_add(&self) -> usize {
-        let idx = self.rx.0.fetch_add(1, atomic::Ordering::Release);
+        let idx = self.rx.0.fetch_add(1, atomic::Ordering::Relaxed);
         let rx = self.rx.1.pin();
         rx.insert(idx);
         idx
@@ -375,7 +384,7 @@ impl UnboundedChannel {
         } {
             return (want_push, Some(message), closed);
         }
-        if self.closed.load(atomic::Ordering::SeqCst) {
+        if self.closed.load(atomic::Ordering::Acquire) {
             want_push.get().set(py);
             closed = true;
         } else {
@@ -469,7 +478,7 @@ impl ChannelSender {
     }
 
     fn _send(&self, py: Python, message: Py<PyAny>) -> PyResult<Py<Event>> {
-        if self.channel.closed.load(atomic::Ordering::SeqCst) {
+        if self.channel.closed.load(atomic::Ordering::Acquire) {
             return Err(pyo3::exceptions::PyBrokenPipeError::new_err("channel closed"));
         }
         Ok(self.channel.push(py, message))
@@ -507,9 +516,9 @@ impl ChannelReceiver {
         if message.is_some() {
             return Ok((event, false, message));
         }
-        if self.channel.closed.load(atomic::Ordering::SeqCst) {
+        if self.channel.closed.load(atomic::Ordering::Acquire) {
             if let Some((message, want_pull)) = self.channel.tx_queue.lock().unwrap().pop_front() {
-                self.channel.len.fetch_sub(1, atomic::Ordering::SeqCst);
+                self.channel.len.fetch_sub(1, atomic::Ordering::Relaxed);
                 want_pull.get().set(py);
                 return Ok((event, false, Some(message)));
             }
@@ -546,7 +555,7 @@ impl UnboundedChannelSender {
     // TODO: clone
 
     fn send(&self, py: Python, message: Py<PyAny>) -> PyResult<()> {
-        if self.channel.closed.load(atomic::Ordering::SeqCst) {
+        if self.channel.closed.load(atomic::Ordering::Acquire) {
             return Err(pyo3::exceptions::PyBrokenPipeError::new_err("Channel closed"));
         }
         self.channel.push(py, message);
