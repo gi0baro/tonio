@@ -60,9 +60,9 @@ impl PyGenHandle {
                     }
 
                     // otherwise, can only be a waiter
-                    if let Ok(waiter) = Bound::from_owned_ptr(py, ret).cast_into_exact::<Waiter>() {
+                    if let Ok(waiter) = Bound::from_owned_ptr(py, ret).extract::<Py<Waiter>>() {
                         Waiter::register_pygen(
-                            waiter.unbind(),
+                            waiter,
                             py,
                             runtime.clone_ref(py),
                             SuspensionTarget::Gen(self.coro.clone_ref(py)),
@@ -157,9 +157,9 @@ impl PyGenCtxHandle {
                     }
 
                     // otherwise, can only be a waiter
-                    if let Ok(waiter) = Bound::from_owned_ptr(py, ret).cast_into_exact::<Waiter>() {
+                    if let Ok(waiter) = Bound::from_owned_ptr(py, ret).extract::<Py<Waiter>>() {
                         Waiter::register_pygen(
-                            waiter.unbind(),
+                            waiter,
                             py,
                             runtime.clone_ref(py),
                             SuspensionTarget::GenCtx((self.coro.clone_ref(py), self.ctx.clone_ref(py))),
@@ -230,9 +230,9 @@ impl PyAsyncGenHandle {
                     }
 
                     // otherwise, can only be a waiter
-                    if let Ok(waiter) = Bound::from_owned_ptr(py, ret).cast_into_exact::<Waiter>() {
+                    if let Ok(waiter) = Bound::from_owned_ptr(py, ret).extract::<Py<Waiter>>() {
                         Waiter::register_pyasyncgen(
-                            waiter.unbind(),
+                            waiter,
                             py,
                             runtime.clone_ref(py),
                             SuspensionTarget::AsyncGen(self.coro.clone_ref(py)),
@@ -299,9 +299,9 @@ impl PyAsyncGenCtxHandle {
                     }
 
                     // otherwise, can only be a waiter
-                    if let Ok(waiter) = Bound::from_owned_ptr(py, ret).cast_into_exact::<Waiter>() {
+                    if let Ok(waiter) = Bound::from_owned_ptr(py, ret).extract::<Py<Waiter>>() {
                         Waiter::register_pyasyncgen(
-                            waiter.unbind(),
+                            waiter,
                             py,
                             runtime.clone_ref(py),
                             SuspensionTarget::AsyncGenCtx((self.coro.clone_ref(py), self.ctx.clone_ref(py))),
