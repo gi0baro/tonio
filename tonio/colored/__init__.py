@@ -10,6 +10,7 @@ from .._colored._ctl import (
 )
 from .._colored._events import Event as Event, Result as Result, Waiter as Waiter
 from .._colored._scope import scope as scope
+from .._colored._subprocess import open_process as open_process, run_process as run_process
 from .._deco import main as main
 from .._runtime import Runtime as Runtime, new as runtime, run as run  # noqa: F401
 from .time import sleep as sleep

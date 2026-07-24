@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use mio::Interest;
 use pyo3::prelude::*;
 
 use super::schedule::ScheduledIO;
@@ -16,7 +17,7 @@ impl PyScheduledIO {
     #[new]
     fn new(py: Python, fd: i32) -> PyResult<Self> {
         let runtime = crate::get_runtime(py)?;
-        let io = runtime.get().io_register(fd)?;
+        let io = runtime.get().io_register(fd, Interest::READABLE | Interest::WRITABLE)?;
         Ok(Self { io })
     }
 
