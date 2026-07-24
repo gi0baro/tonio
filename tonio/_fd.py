@@ -2,11 +2,29 @@ import os
 
 from ._streams import _Stream
 from ._sync import Lock
-from ._tonio import Fd as _Fd
+from ._tonio import Fd as _Fd, ProcFd as _ProcFd
 from ._types import Coro
+from .exceptions import ResourceBroken
 
 
 class Fd(_Fd):
+    @property
+    def closed(self) -> bool:
+        return self.fd == -1
+
+    def close(self) -> None:
+        if self.closed:
+            return
+        fd = self.fd
+        self._io_close()
+        self._drop()
+        os.close(fd)
+
+    def __del__(self) -> None:
+        self.close()
+
+
+class ProcFd(_ProcFd):
     @property
     def closed(self) -> bool:
         return self.fd == -1
@@ -55,6 +73,8 @@ class FdStream(_Stream):
                             except BlockingIOError, InterruptedError:
                                 self._fd._io_clear_w()
                                 continue
+                            except BrokenPipeError as exc:
+                                raise ResourceBroken from exc
                             except BaseException as exc:
                                 raise exc
                             else:
@@ -84,13 +104,12 @@ class FdStream(_Stream):
 
         return data
 
-    def _wait_readable(self) -> Coro[None]:
-        if (waiter := self._fd._io_arm_r()) is not None:
-            yield waiter
-
-    def _wait_writable(self) -> Coro[None]:
-        if (waiter := self._fd._io_arm_w()) is not None:
-            yield waiter
-
     def close(self):
         self._fd.close()
+
+
+def open_proc_fd(pid: int) -> ProcFd | None:
+    try:
+        return ProcFd(pid)
+    except ProcessLookupError:
+        return None

@@ -14,12 +14,12 @@ from contextlib import ExitStack
 from functools import partial
 from typing import TYPE_CHECKING
 
-from .._fd import Fd
+from .._fd import ProcFd, open_proc_fd
 from .._streams import _Stream
-from .._subprocess import HasFileno, Process as _Process, StrOrBytesPath, _pipe_from_child_output, _pipe_to_child_stdin
+from .._subprocess import HasFileno, Process as _Process, StrOrBytesPath
 from ..exceptions import ResourceBroken
-from ._ctl import spawn_blocking
-from ._scope import scope
+from ._ctl import spawn, spawn_blocking
+from ._fd import FdStream
 from ._sync import Lock
 
 
@@ -46,19 +46,29 @@ class Process(_Process):
 
         self._wait_lock: Lock = Lock()
 
-        fd = os.pidfd_open(self._proc.pid, 0)
-        self._pidfd = Fd(fd)
+        self._pidfd: ProcFd | None = open_proc_fd(self._proc.pid)
         self.args: StrOrBytesPath | Sequence[StrOrBytesPath] = self._proc.args
         self.pid: int = self._proc.pid
 
     async def wait(self) -> int:
-        async with self._wait_lock():
+        async with self._wait_lock:
             if self.poll() is None:
-                await self._pidfd._wait_readable()
+                if (waiter := self._pidfd._io_arm_r()) is not None:
+                    await waiter
                 self._proc.wait()
                 self._close_pidfd()
 
         return self._proc.returncode
+
+
+def _pipe_to_child_stdin():
+    rfd, wfd = os.pipe()
+    return FdStream(wfd), rfd
+
+
+def _pipe_from_child_output():
+    rfd, wfd = os.pipe()
+    return FdStream(rfd), wfd
 
 
 async def open_process(
@@ -72,7 +82,7 @@ async def open_process(
     for key in ('universal_newlines', 'text', 'encoding', 'errors', 'bufsize'):
         if options.get(key):
             raise TypeError(
-                'trio.Process only supports communicating over '
+                'tonio.Process only supports communicating over '
                 f"unbuffered byte streams; the '{key}' option is not supported",
             )
 
@@ -168,21 +178,22 @@ async def run_process(
                 chunks.append(chunk)
 
     proc = await open_process(command, **options)
-    async with scope() as sc:
-        if input_ is not None:
-            sc.spawn(feed_input(proc.stdin))
-            proc.stdin = None
-            proc.stdio = None
-        if capture_stdout:
-            sc.spawn(read_output(proc.stdout, stdout_chunks))
-            proc.stdout = None
-            proc.stdio = None
-        if capture_stderr:
-            sc.spawn(read_output(proc.stderr, stderr_chunks))
-            proc.stderr = None
+    tasks = []
+    if input_ is not None:
+        tasks.append(feed_input(proc.stdin))
+        proc.stdin = None
+        proc.stdio = None
+    if capture_stdout:
+        tasks.append(read_output(proc.stdout, stdout_chunks))
+        proc.stdout = None
+        proc.stdio = None
+    if capture_stderr:
+        tasks.append(read_output(proc.stderr, stderr_chunks))
+        proc.stderr = None
 
-        await proc.wait()
-        sc.cancel()
+    tasks = spawn.without_results(*tasks)
+    await proc.wait()
+    await tasks
 
     stdout = b''.join(stdout_chunks) if capture_stdout else None
     stderr = b''.join(stderr_chunks) if capture_stderr else None

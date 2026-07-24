@@ -1,5 +1,6 @@
 use std::sync::{Arc, atomic};
 
+use mio::Interest;
 use pyo3::prelude::*;
 
 use crate::{events::Waiter, io::schedule::ScheduledIO};
@@ -21,7 +22,9 @@ impl Socket {
 
         let runtime = crate::get_runtime(py)?;
         #[allow(clippy::cast_possible_wrap)]
-        let io = runtime.get().io_register(fd as i32)?;
+        let io = runtime
+            .get()
+            .io_register(fd as i32, Interest::READABLE | Interest::WRITABLE)?;
 
         Ok(Self {
             _sock: stdlib_sock,

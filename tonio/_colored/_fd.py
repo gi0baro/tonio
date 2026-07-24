@@ -1,6 +1,7 @@
 import os
 
 from .._fd import FdStream as _FdStream
+from ..exceptions import ResourceBroken
 
 
 class FdStream(_FdStream):
@@ -27,6 +28,8 @@ class FdStream(_FdStream):
                             except BlockingIOError, InterruptedError:
                                 self._fd._io_clear_w()
                                 continue
+                            except BrokenPipeError as exc:
+                                raise ResourceBroken from exc
                             except BaseException as exc:
                                 raise exc
                             else:
@@ -55,11 +58,3 @@ class FdStream(_FdStream):
                     break
 
         return data
-
-    async def _wait_readable(self):
-        if (waiter := self._fd._io_arm_r()) is not None:
-            await waiter
-
-    async def _wait_writable(self):
-        if (waiter := self._fd._io_arm_w()) is not None:
-            await waiter

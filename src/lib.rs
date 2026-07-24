@@ -16,6 +16,7 @@ mod fd;
 mod handles;
 mod io;
 mod net;
+mod proc;
 mod py;
 mod runtime;
 mod scope;
@@ -76,6 +77,7 @@ fn _tonio(module: &Bound<PyModule>) -> PyResult<()> {
     fd::init_pymodule(module)?;
     io::init_pymodule(module)?;
     net::init_pymodule(module)?;
+    proc::init_pymodule(module)?;
     runtime::init_pymodule(module)?;
     scope::init_pymodule(module)?;
     sync::init_pymodule(module)?;

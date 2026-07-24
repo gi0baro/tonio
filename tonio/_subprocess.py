@@ -19,9 +19,8 @@ from typing import (
     TypeAlias,
 )
 
-from ._ctl import spawn_blocking
-from ._fd import Fd
-from ._scope import scope
+from ._ctl import spawn, spawn_blocking
+from ._fd import FdStream, ProcFd, open_proc_fd
 from ._streams import _Stream
 from ._sync import Lock
 from ._types import Coro
@@ -62,8 +61,7 @@ class Process:
 
         self._wait_lock: Lock = Lock()
 
-        fd = os.pidfd_open(self._proc.pid, 0)
-        self._pidfd = Fd(fd)
+        self._pidfd: ProcFd | None = open_proc_fd(self._proc.pid)
         self.args: StrOrBytesPath | Sequence[StrOrBytesPath] = self._proc.args
         self.pid: int = self._proc.pid
 
@@ -93,7 +91,8 @@ class Process:
     def wait(self) -> Coro[int]:
         with (yield self._wait_lock()):
             if self.poll() is None:
-                yield self._pidfd._wait_readable()
+                if (waiter := self._pidfd._io_arm_r()) is not None:
+                    yield waiter
                 self._proc.wait()
                 self._close_pidfd()
 
@@ -114,12 +113,12 @@ class Process:
 
 def _pipe_to_child_stdin():
     rfd, wfd = os.pipe()
-    return Fd(wfd), rfd
+    return FdStream(wfd), rfd
 
 
 def _pipe_from_child_output():
     rfd, wfd = os.pipe()
-    return Fd(rfd), wfd
+    return FdStream(rfd), wfd
 
 
 def open_process(
@@ -133,7 +132,7 @@ def open_process(
     for key in ('universal_newlines', 'text', 'encoding', 'errors', 'bufsize'):
         if options.get(key):
             raise TypeError(
-                'trio.Process only supports communicating over '
+                'tonio.Process only supports communicating over '
                 f"unbuffered byte streams; the '{key}' option is not supported",
             )
 
@@ -229,22 +228,22 @@ def run_process(
                 chunks.append(chunk)
 
     proc = yield open_process(command, **options)
-    with scope() as sc:
-        if input_ is not None:
-            sc.spawn(feed_input(proc.stdin))
-            proc.stdin = None
-            proc.stdio = None
-        if capture_stdout:
-            sc.spawn(read_output(proc.stdout, stdout_chunks))
-            proc.stdout = None
-            proc.stdio = None
-        if capture_stderr:
-            sc.spawn(read_output(proc.stderr, stderr_chunks))
-            proc.stderr = None
+    tasks = []
+    if input_ is not None:
+        tasks.append(feed_input(proc.stdin))
+        proc.stdin = None
+        proc.stdio = None
+    if capture_stdout:
+        tasks.append(read_output(proc.stdout, stdout_chunks))
+        proc.stdout = None
+        proc.stdio = None
+    if capture_stderr:
+        tasks.append(read_output(proc.stderr, stderr_chunks))
+        proc.stderr = None
 
-        yield proc.wait()
-        sc.cancel()
-    yield sc
+    tasks = spawn.without_results(*tasks)
+    yield proc.wait()
+    yield tasks
 
     stdout = b''.join(stdout_chunks) if capture_stdout else None
     stderr = b''.join(stderr_chunks) if capture_stderr else None

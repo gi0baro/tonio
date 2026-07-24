@@ -3,6 +3,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use mio::Interest;
 use pyo3::prelude::*;
 
 use crate::{events::Waiter, io::schedule::ScheduledIO};
@@ -23,8 +24,7 @@ impl Fd {
 
         let inner = unsafe { OwnedFd::from_raw_fd(fd) };
         let runtime = crate::get_runtime(py)?;
-        #[allow(clippy::cast_possible_wrap)]
-        let io = runtime.get().io_register(fd)?;
+        let io = runtime.get().io_register(fd, Interest::READABLE | Interest::WRITABLE)?;
 
         Ok(Self {
             io,
