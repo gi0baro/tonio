@@ -183,15 +183,17 @@ impl Runtime {
         }
     }
 
-    fn stop_threads(&self, cond: Arc<(Mutex<usize>, Condvar)>) {
+    fn stop_threads(&self, py: Python, cond: Arc<(Mutex<usize>, Condvar)>) {
         self.work_stopping.store(true, atomic::Ordering::Release);
         if let Some(sched) = self.work_schedule.load_full() {
             for unparker in &sched.unparkers {
                 unparker.unpark();
             }
         }
-        let (lock, cvar) = &*cond;
-        let _guard = cvar.wait_while(lock.lock().unwrap(), |pending| *pending > 0);
+        py.detach(|| {
+            let (lock, cvar) = &*cond;
+            let _guard = cvar.wait_while(lock.lock().unwrap(), |pending| *pending > 0);
+        });
     }
 
     #[inline(always)]
@@ -280,7 +282,7 @@ impl Runtime {
     fn teardown(&self, py: Python, state: &mut RuntimeState, threads_cvar: Arc<(Mutex<usize>, Condvar)>) {
         _ = self.drop_sig_socket(py, state);
         self.cleanup_io(state);
-        self.stop_threads(threads_cvar);
+        self.stop_threads(py, threads_cvar);
         self.work_schedule.swap(None);
         self.waker.swap(None);
         self.io_registry.swap(None);
