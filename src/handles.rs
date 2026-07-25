@@ -60,22 +60,16 @@ impl PyGenHandle {
                     }
 
                     // otherwise, can only be a waiter
-                    if let Ok(waiter) = Bound::from_owned_ptr(py, ret).cast_into_exact::<Waiter>() {
-                        Waiter::register_pygen(
+                    match Bound::from_owned_ptr(py, ret).cast_into_exact::<Waiter>() {
+                        Ok(waiter) => Waiter::register_pygen(
                             waiter.unbind(),
                             py,
                             runtime.clone_ref(py),
                             SuspensionTarget::Gen(self.coro.clone_ref(py)),
                             self.parent.clone(),
-                        );
-                        return;
+                        ),
+                        Err(err) => panic!("Got unsupported value {:?} from gen iteration", err.into_inner()),
                     }
-
-                    // if we get here, we can't continue
-                    panic!(
-                        "Got unsupported value {:?} from gen iteration",
-                        Bound::from_owned_ptr(py, ret)
-                    );
                 }
                 pyo3::ffi::PySendResult::PYGEN_RETURN => {
                     if let Some((suspension, idx)) = &self.parent {
@@ -157,22 +151,16 @@ impl PyGenCtxHandle {
                     }
 
                     // otherwise, can only be a waiter
-                    if let Ok(waiter) = Bound::from_owned_ptr(py, ret).cast_into_exact::<Waiter>() {
-                        Waiter::register_pygen(
+                    match Bound::from_owned_ptr(py, ret).cast_into_exact::<Waiter>() {
+                        Ok(waiter) => Waiter::register_pygen(
                             waiter.unbind(),
                             py,
                             runtime.clone_ref(py),
                             SuspensionTarget::GenCtx((self.coro.clone_ref(py), self.ctx.clone_ref(py))),
                             self.parent.clone(),
-                        );
-                        return;
+                        ),
+                        Err(err) => panic!("Got unsupported value {:?} from gen iteration", err.into_inner()),
                     }
-
-                    // if we get here, we can't continue
-                    panic!(
-                        "Got unsupported value {:?} from gen iteration",
-                        Bound::from_owned_ptr(py, ret)
-                    );
                 }
                 pyo3::ffi::PySendResult::PYGEN_RETURN => {
                     if let Some((suspension, idx)) = &self.parent {
@@ -230,21 +218,16 @@ impl PyAsyncGenHandle {
                     }
 
                     // otherwise, can only be a waiter
-                    if let Ok(waiter) = Bound::from_owned_ptr(py, ret).cast_into_exact::<Waiter>() {
-                        Waiter::register_pyasyncgen(
+                    match Bound::from_owned_ptr(py, ret).cast_into_exact::<Waiter>() {
+                        Ok(waiter) => Waiter::register_pyasyncgen(
                             waiter.unbind(),
                             py,
                             runtime.clone_ref(py),
                             SuspensionTarget::AsyncGen(self.coro.clone_ref(py)),
                             self.checkpoint.clone(),
-                        );
-                        return;
+                        ),
+                        Err(err) => panic!("Got unsupported value {:?} from asyncgen iteration", err.into_inner()),
                     }
-
-                    panic!(
-                        "Got unsupported value {:?} from asyncgen iteration",
-                        Bound::from_owned_ptr(py, ret)
-                    );
                 }
                 pyo3::ffi::PySendResult::PYGEN_ERROR => {
                     let err = pyo3::PyErr::fetch(py);
@@ -299,21 +282,16 @@ impl PyAsyncGenCtxHandle {
                     }
 
                     // otherwise, can only be a waiter
-                    if let Ok(waiter) = Bound::from_owned_ptr(py, ret).cast_into_exact::<Waiter>() {
-                        Waiter::register_pyasyncgen(
+                    match Bound::from_owned_ptr(py, ret).cast_into_exact::<Waiter>() {
+                        Ok(waiter) => Waiter::register_pyasyncgen(
                             waiter.unbind(),
                             py,
                             runtime.clone_ref(py),
                             SuspensionTarget::AsyncGenCtx((self.coro.clone_ref(py), self.ctx.clone_ref(py))),
                             self.checkpoint.clone(),
-                        );
-                        return;
+                        ),
+                        Err(err) => panic!("Got unsupported value {:?} from asyncgen iteration", err.into_inner()),
                     }
-
-                    panic!(
-                        "Got unsupported value {:?} from asyncgen iteration",
-                        Bound::from_owned_ptr(py, ret)
-                    );
                 }
                 pyo3::ffi::PySendResult::PYGEN_ERROR => {
                     let err = pyo3::PyErr::fetch(py);
@@ -345,23 +323,56 @@ impl Handle for PyGenThrower {
         unsafe {
             let ret =
                 pyo3::ffi::PyObject_CallMethodOneArg(self.coro.as_ptr(), throw_method.as_ptr(), self.value.as_ptr());
-            let res = Bound::from_owned_ptr_or_err(py, ret);
-            if let Some((suspension, idx)) = &self.parent {
-                match res {
-                    Ok(val) => suspension.resume(py, runtime.get(), val.unbind(), *idx),
-                    Err(err) if err.is_instance_of::<pyo3::exceptions::PyStopIteration>(py) => {
+
+            match Bound::from_owned_ptr_or_err(py, ret) {
+                Ok(val) => {
+                    // generator still alive, extract and build a new handle
+                    let Self { parent, coro, .. } = *self;
+
+                    if ret == py.None().as_ptr() {
+                        runtime.get().defer_handle(Box::new(PyGenHandle {
+                            parent,
+                            coro,
+                            value: val.unbind(),
+                        }));
+                        return;
+                    }
+
+                    if pyo3::ffi::PyGen_Check(ret) != 0 {
+                        let suspension = PyGenSuspension::from_handle(SuspensionTarget::Gen(coro), parent).into();
+                        runtime.get().add_handle(Box::new(PyGenHandle {
+                            parent: Some((suspension, 0)),
+                            coro: val.unbind(),
+                            value: py.None(),
+                        }));
+                        return;
+                    }
+
+                    match val.cast_into_exact::<Waiter>() {
+                        Ok(waiter) => Waiter::register_pygen(
+                            waiter.unbind(),
+                            py,
+                            runtime.clone_ref(py),
+                            SuspensionTarget::Gen(coro),
+                            parent,
+                        ),
+                        Err(err) => panic!("Got unsupported value {:?} from gen throw", err.into_inner()),
+                    }
+                }
+                Err(err) if err.is_instance_of::<pyo3::exceptions::PyStopIteration>(py) => {
+                    if let Some((suspension, idx)) = &self.parent {
                         let value = err.value(py).getattr(pyo3::intern!(py, "value")).unwrap().unbind();
                         suspension.resume(py, runtime.get(), value, *idx);
                     }
-                    Err(err) => suspension.error(py, runtime.get(), err),
                 }
-                return;
-            }
-            if let Err(err) = res
-                && !err.is_instance_of::<pyo3::exceptions::PyStopIteration>(py)
-            {
-                println!("UNHANDLED PYGEN THROW {:?}", self.coro.bind(py));
-                err.print(py);
+                Err(err) => {
+                    if let Some((suspension, _idx)) = &self.parent {
+                        suspension.error(py, runtime.get(), err);
+                    } else {
+                        println!("UNHANDLED PYGEN THROW {:?}", self.coro.bind(py));
+                        err.print(py);
+                    }
+                }
             }
         }
     }
@@ -389,23 +400,59 @@ impl Handle for PyGenCtxThrower {
             pyo3::ffi::PyContext_Exit(cctx);
             pyo3::ffi::Py_DECREF(cctx);
 
-            let res = Bound::from_owned_ptr_or_err(py, ret);
-            if let Some((suspension, idx)) = &self.parent {
-                match res {
-                    Ok(val) => suspension.resume(py, runtime.get(), val.unbind(), *idx),
-                    Err(err) if err.is_instance_of::<pyo3::exceptions::PyStopIteration>(py) => {
+            match Bound::from_owned_ptr_or_err(py, ret) {
+                Ok(val) => {
+                    // generator still alive, extract and build a new handle
+                    let Self { parent, coro, ctx, .. } = *self;
+
+                    if ret == py.None().as_ptr() {
+                        runtime.get().defer_handle(Box::new(PyGenCtxHandle {
+                            parent,
+                            coro,
+                            ctx,
+                            value: val.unbind(),
+                        }));
+                        return;
+                    }
+
+                    if pyo3::ffi::PyGen_Check(ret) != 0 {
+                        let suspension =
+                            PyGenSuspension::from_handle(SuspensionTarget::GenCtx((coro, ctx.clone_ref(py))), parent)
+                                .into();
+                        runtime.get().add_handle(Box::new(PyGenCtxHandle {
+                            parent: Some((suspension, 0)),
+                            coro: val.unbind(),
+                            ctx,
+                            value: py.None(),
+                        }));
+                        return;
+                    }
+
+                    match val.cast_into_exact::<Waiter>() {
+                        Ok(waiter) => Waiter::register_pygen(
+                            waiter.unbind(),
+                            py,
+                            runtime.clone_ref(py),
+                            SuspensionTarget::GenCtx((coro, ctx)),
+                            parent,
+                        ),
+                        Err(err) => panic!("Got unsupported value {:?} from gen throw", err.into_inner()),
+                    }
+                }
+                Err(err) if err.is_instance_of::<pyo3::exceptions::PyStopIteration>(py) => {
+                    if let Some((suspension, idx)) = &self.parent {
                         let value = err.value(py).getattr(pyo3::intern!(py, "value")).unwrap().unbind();
                         suspension.resume(py, runtime.get(), value, *idx);
                     }
-                    Err(err) => suspension.error(py, runtime.get(), err),
                 }
-                return;
-            }
-            if let Err(err) = res
-                && !err.is_instance_of::<pyo3::exceptions::PyStopIteration>(py)
-            {
-                println!("UNHANDLED PYGEN THROW {:?}", self.coro.bind(py));
-                err.print(py);
+                Err(err) => {
+                    if let Some((suspension, _idx)) = &self.parent {
+                        suspension.error(py, runtime.get(), err);
+                    } else {
+                        println!("UNHANDLED PYGEN THROW {:?}", self.coro.bind(py));
+                        err.print(py);
+                    }
+                }
             }
         }
     }
