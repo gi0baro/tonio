@@ -8,27 +8,117 @@ use std::{
 use crate::errors::CancelledError;
 use crate::events::{Event, ResultHolder};
 
+#[derive(Clone, Copy)]
+#[repr(u8)]
+enum TaskState {
+    Queued,
+    Running,
+    Cancelled,
+    Done,
+}
+
+struct BlockingTaskState(atomic::AtomicU8);
+
+impl BlockingTaskState {
+    #[inline(always)]
+    const fn new(state: TaskState) -> Self {
+        Self(atomic::AtomicU8::new(state as u8))
+    }
+
+    #[inline(always)]
+    fn is(&self, state: TaskState) -> bool {
+        self.0.load(atomic::Ordering::Acquire) == state as u8
+    }
+
+    #[inline(always)]
+    fn store(&self, state: TaskState) {
+        self.0.store(state as u8, atomic::Ordering::Release);
+    }
+
+    #[inline]
+    fn transition(&self, from: TaskState, to: TaskState) -> bool {
+        self.0
+            .compare_exchange(
+                from as u8,
+                to as u8,
+                atomic::Ordering::AcqRel,
+                atomic::Ordering::Acquire,
+            )
+            .is_ok()
+    }
+}
+
 #[pyclass(frozen, module = "tonio._tonio")]
 pub(crate) struct BlockingTaskCtl {
+    state: BlockingTaskState,
     tid: atomic::AtomicUsize,
+    event: Py<Event>,
+    result: Py<ResultHolder>,
+}
+
+impl BlockingTaskCtl {
+    #[inline(always)]
+    fn store_ok(&self, py: Python, value: Py<PyAny>) {
+        let result = self.result.get();
+        result.store(pyo3::types::PyBool::new(py, false).as_any().clone().unbind(), Some(0));
+        result.store(value, Some(1));
+    }
+
+    #[inline(always)]
+    fn store_err(&self, py: Python, err: &PyErr) {
+        let result = self.result.get();
+        result.store(pyo3::types::PyBool::new(py, true).as_any().clone().unbind(), Some(0));
+        result.store(err.value(py).as_any().clone().unbind(), Some(1));
+    }
+
+    #[inline(always)]
+    fn notify(&self, py: Python) {
+        self.event.get().set(py);
+    }
+
+    #[inline(always)]
+    fn begin(&self, py: Python) -> bool {
+        //: published before the transition so anything observing `Running` sees a usable tid
+        self.tid.store(
+            crate::py::thread_ident(py).unwrap().try_into().unwrap(),
+            atomic::Ordering::Release,
+        );
+        if self.state.transition(TaskState::Queued, TaskState::Running) {
+            return true;
+        }
+        self.tid.store(0, atomic::Ordering::Release);
+        false
+    }
+
+    #[inline(always)]
+    fn finish(&self) {
+        self.tid.store(0, atomic::Ordering::Release);
+        self.state.store(TaskState::Done);
+    }
 }
 
 #[pymethods]
 impl BlockingTaskCtl {
     fn abort(&self, py: Python) {
-        let tid = self.tid.load(atomic::Ordering::Acquire);
-        if tid > 0 {
-            let err = CancelledError::type_object(py);
-            unsafe {
-                pyo3::ffi::PyThreadState_SetAsyncExc(tid.cast_signed().try_into().unwrap(), err.as_ptr());
+        if self.state.transition(TaskState::Queued, TaskState::Cancelled) {
+            self.store_err(py, &crate::errors::abort());
+            self.notify(py);
+            return;
+        }
+
+        if self.state.is(TaskState::Running) {
+            let tid = self.tid.load(atomic::Ordering::Acquire);
+            if tid > 0 {
+                let err = CancelledError::type_object(py);
+                unsafe {
+                    pyo3::ffi::PyThreadState_SetAsyncExc(tid.cast_signed().try_into().unwrap(), err.as_ptr());
+                }
             }
         }
     }
 }
 
 pub(crate) struct BlockingTask {
-    event: Py<Event>,
-    result: Py<ResultHolder>,
     ctl: Py<BlockingTaskCtl>,
     target: Py<PyAny>,
     args: Py<PyAny>,
@@ -46,10 +136,17 @@ impl BlockingTask {
     ) -> (Self, Py<BlockingTaskCtl>, Py<Event>, Py<ResultHolder>) {
         let event = Py::new(py, Event::new()).unwrap();
         let rh = Py::new(py, ResultHolder::new(py, 2)).unwrap();
-        let ctl = Py::new(py, BlockingTaskCtl { tid: 0.into() }).unwrap();
+        let ctl = Py::new(
+            py,
+            BlockingTaskCtl {
+                state: BlockingTaskState::new(TaskState::Queued),
+                tid: 0.into(),
+                event: event.clone_ref(py),
+                result: rh.clone_ref(py),
+            },
+        )
+        .unwrap();
         let task = Self {
-            event: event.clone_ref(py),
-            result: rh.clone_ref(py),
             ctl: ctl.clone_ref(py),
             target,
             args,
@@ -60,12 +157,11 @@ impl BlockingTask {
     }
 
     fn run(self, py: Python) {
-        self.ctl.get().tid.store(
-            crate::py::thread_ident(py).unwrap().try_into().unwrap(),
-            atomic::Ordering::Release,
-        );
+        if !self.ctl.get().begin(py) {
+            return;
+        }
 
-        match unsafe {
+        let res = unsafe {
             let ctx = self.ctx.as_ref().map(Py::as_ptr);
             let callable = self.target.into_ptr();
             let args = self.args.into_ptr();
@@ -80,20 +176,15 @@ impl BlockingTask {
                 pyo3::ffi::PyContext_Exit(ctx);
             }
             Bound::from_owned_ptr_or_err(py, ret)
-        } {
-            Ok(v) => {
-                let result = self.result.get();
-                result.store(pyo3::types::PyBool::new(py, false).as_any().clone().unbind(), Some(0));
-                result.store(v.unbind(), Some(1));
-            }
-            Err(err) => {
-                let result = self.result.get();
-                result.store(pyo3::types::PyBool::new(py, true).as_any().clone().unbind(), Some(0));
-                result.store(err.value(py).as_any().clone().unbind(), Some(1));
-            }
-        }
+        };
 
-        self.event.get().set(py);
+        let ctl = self.ctl.get();
+        match res {
+            Ok(v) => ctl.store_ok(py, v.unbind()),
+            Err(err) => ctl.store_err(py, &err),
+        }
+        ctl.finish();
+        ctl.notify(py);
     }
 }
 
@@ -151,6 +242,8 @@ fn blocking_worker(
     tcount: Arc<atomic::AtomicUsize>,
 ) {
     Python::attach(|py| {
+        let tid = crate::py::thread_ident(py).unwrap();
+
         while let Ok(task) = py.detach(|| {
             load.fetch_sub(1, atomic::Ordering::Relaxed);
             let mut res = queue.recv_timeout(timeout);
@@ -165,6 +258,11 @@ fn blocking_worker(
             res
         }) {
             task.run(py);
+
+            //: always cleanup threadstate async exc
+            unsafe {
+                pyo3::ffi::PyThreadState_SetAsyncExc(tid.try_into().unwrap(), std::ptr::null_mut());
+            }
         }
     });
 }
