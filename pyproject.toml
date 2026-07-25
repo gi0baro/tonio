@@ -34,7 +34,7 @@ build = [
     'maturin~=1.8',
 ]
 lint = [
-    'ruff~=0.11',
+    'ruff~=0.15.20',
 ]
 test = [
     'pytest~=8.3',

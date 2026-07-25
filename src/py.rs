@@ -1,6 +1,7 @@
 use pyo3::{prelude::*, sync::PyOnceLock};
 
 // static SOCKET: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+static OS: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 static SYS: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 static THREADING: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 
@@ -9,6 +10,10 @@ static THREADING: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 //         .get_or_try_init(py, || py.import("socket").map(Into::into))?
 //         .bind(py))
 // }
+
+fn os(py: Python<'_>) -> PyResult<&Bound<'_, PyAny>> {
+    Ok(OS.get_or_try_init(py, || py.import("os").map(Into::into))?.bind(py))
+}
 
 fn sys(py: Python<'_>) -> PyResult<&Bound<'_, PyAny>> {
     Ok(SYS.get_or_try_init(py, || py.import("sys").map(Into::into))?.bind(py))
@@ -23,6 +28,18 @@ fn threading(py: Python<'_>) -> PyResult<&Bound<'_, PyAny>> {
 // pub(crate) fn sock(py: Python) -> PyResult<Bound<PyAny>> {
 //     socket(py)?.getattr(pyo3::intern!(py, "socket"))
 // }
+
+pub(crate) fn os_get_blocking(py: Python, fd: i32) -> PyResult<bool> {
+    os(py)?
+        .call_method1(pyo3::intern!(py, "get_blocking"), (fd,))?
+        .extract::<bool>()
+}
+
+pub(crate) fn os_set_blocking(py: Python, fd: i32, val: bool) -> PyResult<()> {
+    os(py)?
+        .call_method1(pyo3::intern!(py, "set_blocking"), (fd, val))
+        .map(|_| ())
+}
 
 pub(crate) fn sys_gil(py: Python) -> PyResult<bool> {
     sys(py)?

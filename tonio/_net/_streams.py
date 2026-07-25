@@ -2,28 +2,11 @@ from __future__ import annotations
 
 import errno
 import socket as _stdlib_socket
-from abc import ABC, abstractmethod
 from contextlib import suppress
-from types import TracebackType
 
+from .._streams import _Stream
 from .._types import Coro
 from ._socket import _Socket
-
-
-class _Stream(ABC):
-    def __enter__(self):
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_value: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> None:
-        self.close()
-
-    @abstractmethod
-    def close(self): ...
 
 
 class SocketStream(_Stream):

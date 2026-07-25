@@ -148,13 +148,13 @@ impl Runtime {
         poll_result
     }
 
-    pub(crate) fn io_register(&self, fd: i32) -> anyhow::Result<Arc<ScheduledIO>> {
+    pub(crate) fn io_register(&self, fd: i32, interest: Interest) -> anyhow::Result<Arc<ScheduledIO>> {
         let registry = self.io_registry.load_full().expect("runtime is not running");
         let io = Arc::new(ScheduledIO::new(fd));
         let token = Arc::as_ptr(&io).expose_provenance();
         self.io_registrations.pin().insert(token, io.clone());
         let mut source = Source::FD(fd);
-        if let Err(err) = registry.register(&mut source, Token(token), Interest::READABLE | Interest::WRITABLE) {
+        if let Err(err) = registry.register(&mut source, Token(token), interest) {
             self.io_registrations.pin().remove(&token);
             return Err(err.into());
         }
