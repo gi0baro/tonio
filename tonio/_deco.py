@@ -15,9 +15,9 @@ def main(
         #: opts
         def deco(coro):
             @wraps(coro)
-            def wrapper():
-                run(
-                    coro(),
+            def wrapper(*args, **kwargs):
+                return run(
+                    coro(*args, **kwargs),
                     context=context,
                     signals=signals,
                     threads=threads,
@@ -35,7 +35,7 @@ def main(
     [coro] = coros
 
     @wraps(coro)
-    def wrapper():
-        run(coro())
+    def wrapper(*args, **kwargs):
+        return run(coro(*args, **kwargs))
 
     return wrapper
