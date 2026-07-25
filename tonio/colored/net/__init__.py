@@ -6,3 +6,4 @@ from ..._colored._net._hilvl import (
     serve_tcp as serve_tcp,
 )
 from ..._colored._net._streams import SocketListener as SocketListener, SocketStream as SocketStream
+from . import socket as socket, tls as tls

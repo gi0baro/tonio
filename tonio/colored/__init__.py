@@ -13,4 +13,5 @@ from .._colored._scope import scope as scope
 from .._colored._subprocess import open_process as open_process, run_process as run_process
 from .._deco import main as main
 from .._runtime import Runtime as Runtime, new as runtime, run as run  # noqa: F401
+from . import exceptions as exceptions, time as time
 from .time import sleep as sleep
