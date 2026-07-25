@@ -1,21 +1,24 @@
-import contextlib
 import errno
 import signal
 import threading
 
-from ._tonio import CancelledError, get_runtime
+from ._tonio import get_runtime
 
 
 class _SignalReceiver:
-    __slots__ = ['_sigs', '_chr', '_chw', '_inner']
+    __slots__ = ['_sigs', '_chr', '_chw', '_checkpoints']
 
     def __init__(self, sigs):
         self._sigs = sigs
+        self._checkpoints = []
 
     def _init_channel(self):
         raise NotImplementedError
 
     def _register_coros(self, runtime):
+        raise NotImplementedError
+
+    def _cancel_coros(self):
         raise NotImplementedError
 
     def __enter__(self):
@@ -27,8 +30,7 @@ class _SignalReceiver:
         runtime = get_runtime()
         for sig in self._sigs:
             runtime._sig_rem(sig)
-        with contextlib.suppress(CancelledError):
-            self._inner.throw(CancelledError)
+        self._cancel_coros()
 
     def __iter__(self):
         return self
