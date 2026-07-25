@@ -952,8 +952,10 @@ You can create and interact with the above objects using some high-level helpers
 - `open_tcp_stream`: a coroutine to open a `SocketStream` connected to a TCP endpoint
 - `open_unix_socket`: a coroutine to open a `SocketStream` connected to an Unix socket
 - `open_tcp_listeners`: a coroutine to initialise `SocketListener` objects
+- `open_unix_listener`: a coroutine to initialise a `SocketListener` on an Unix socket path
 - `serve_listeners`: a coroutine to spawn `SocketListener` accept loops targeting a handler
 - `serve_tcp`: a coroutine that join `open_tcp_listener` and `serve_listeners` in one call
+- `serve_unix`: a coroutine that join `open_unix_listener` and `serve_listeners` in one call
 
 <table><tr><td>
 
@@ -1005,6 +1007,50 @@ async def client():
         port=8000
     )
     # send some data
+    await stream.send_all("message")
+```
+</td></tr></table>
+
+Unix domain sockets use the same objects, with `serve_unix` and `open_unix_socket`:
+
+<table><tr><td>
+
+`yield` syntax
+
+```python
+from tonio.net import open_unix_socket, serve_unix
+
+def server():
+    yield serve_unix(
+        server_handle, 
+        '/tmp/app.sock', 
+        mode=0o600
+    )
+
+def client():
+    stream = yield open_unix_socket(
+        '/tmp/app.sock'
+    )
+    yield stream.send_all("message")
+```
+</td><td>
+
+`await` syntax
+
+```python
+from tonio.colored.net import open_unix_socket, serve_unix
+
+async def server():
+    await serve_unix(
+        server_handle, 
+        '/tmp/app.sock', 
+        mode=0o600
+    )
+
+async def client():
+    stream = await open_unix_socket(
+        '/tmp/app.sock'
+    )
     await stream.send_all("message")
 ```
 </td></tr></table>

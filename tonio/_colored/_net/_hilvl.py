@@ -13,8 +13,14 @@ import ssl as _stdlib_ssl
 import sys
 from typing import Any
 
-from ..._net._hilvl import _accept_retry_errnos, _close_all_sockets, _close_on_error
-from .._ctl import spawn
+from ..._net._hilvl import (
+    _accept_retry_errnos,
+    _close_all_sockets,
+    _close_on_error,
+    _unix_bind,
+    _unix_check_path,
+)
+from .._ctl import spawn, spawn_blocking
 from .._events import Event
 from .._scope import scope
 from .._time import sleep
@@ -164,6 +170,22 @@ async def open_tcp_listeners(
     return listeners
 
 
+async def open_unix_listener(
+    path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+    *,
+    mode: int | None = None,
+    backlog: int | None = None,
+) -> SocketListener:
+    fspath = _unix_check_path(path, mode)
+    backlog = min(backlog or 0xFFFF, 0xFFFF)
+
+    sock = socket(_stdlib_socket.AF_UNIX, _stdlib_socket.SOCK_STREAM)
+    with _close_on_error(sock):
+        await spawn_blocking(_unix_bind, sock._sock, fspath, mode)
+        sock.listen(backlog)
+        return SocketListener(sock)
+
+
 async def serve_listeners(
     handler: Any,
     listeners: list[SocketListener],
@@ -197,6 +219,17 @@ async def serve_tcp(
 ) -> None:
     listeners = await open_tcp_listeners(port, host=host, backlog=backlog)
     await serve_listeners(handler, listeners)
+
+
+async def serve_unix(
+    handler: Any,
+    path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+    *,
+    mode: int | None = None,
+    backlog: int | None = None,
+) -> None:
+    listener = await open_unix_listener(path, mode=mode, backlog=backlog)
+    await serve_listeners(handler, [listener])
 
 
 async def open_tls_over_tcp_stream(

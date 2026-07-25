@@ -11,10 +11,10 @@ import os
 import socket as _stdlib_socket
 import ssl as _stdlib_ssl
 import sys
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from typing import Any, Generator
 
-from .._ctl import spawn
+from .._ctl import spawn, spawn_blocking
 from .._events import Event
 from .._scope import scope
 from .._time import sleep
@@ -57,6 +57,33 @@ def _close_on_error(obj: Any) -> Generator[Any, None, None]:
     except:
         obj.close()
         raise
+
+
+def _unix_check_path(path: Any, mode: int | None) -> str | bytes:
+    fspath = os.fspath(path)
+    if not fspath:
+        raise ValueError('path must not be empty')
+    if mode is not None and isinstance(fspath, bytes) and fspath.startswith(b'\0'):
+        raise ValueError('mode is not supported for abstract namespace sockets')
+
+    return fspath
+
+
+def _unix_bind(sock: _stdlib_socket.socket, path: str | bytes, mode: int | None) -> None:
+    try:
+        sock.bind(path)
+    except OSError as exc:
+        if exc.errno == errno.EADDRINUSE:
+            raise OSError(errno.EADDRINUSE, f'Address {path!r} is already in use') from None
+        raise
+
+    if mode is not None:
+        try:
+            os.chmod(path, mode)
+        except BaseException:
+            with suppress(OSError):
+                os.unlink(path)
+            raise
 
 
 def open_tcp_stream(
@@ -202,6 +229,22 @@ def open_tcp_listeners(
     return listeners
 
 
+def open_unix_listener(
+    path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+    *,
+    mode: int | None = None,
+    backlog: int | None = None,
+) -> Coro[SocketListener]:
+    fspath = _unix_check_path(path, mode)
+    backlog = min(backlog or 0xFFFF, 0xFFFF)
+
+    sock = socket(_stdlib_socket.AF_UNIX, _stdlib_socket.SOCK_STREAM)
+    with _close_on_error(sock):
+        yield spawn_blocking(_unix_bind, sock._sock, fspath, mode)
+        sock.listen(backlog)
+        return SocketListener(sock)
+
+
 def serve_listeners(
     handler: Any,
     listeners: list[SocketListener],
@@ -235,6 +278,17 @@ def serve_tcp(
 ) -> Coro[None]:
     listeners = yield open_tcp_listeners(port, host=host, backlog=backlog)
     yield serve_listeners(handler, listeners)
+
+
+def serve_unix(
+    handler: Any,
+    path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+    *,
+    mode: int | None = None,
+    backlog: int | None = None,
+) -> Coro[None]:
+    listener = yield open_unix_listener(path, mode=mode, backlog=backlog)
+    yield serve_listeners(handler, [listener])
 
 
 def open_tls_over_tcp_stream(
