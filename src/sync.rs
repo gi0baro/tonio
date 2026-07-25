@@ -213,196 +213,200 @@ impl SemaphoreCtx {
     }
 }
 
+struct ChannelState {
+    queue: VecDeque<(Py<PyAny>, Option<Py<Event>>)>,
+    waiters: VecDeque<Py<Event>>,
+}
+
 struct Channel {
     size: usize,
     len: atomic::AtomicUsize,
-    tx_queue: Mutex<VecDeque<(Py<PyAny>, Py<Event>)>>,
-    rx_queue: Mutex<VecDeque<Py<Event>>>,
-    tx: (atomic::AtomicUsize, papaya::HashSet<usize>),
-    rx: (atomic::AtomicUsize, papaya::HashSet<usize>),
+    state: Mutex<ChannelState>,
+    tx: atomic::AtomicUsize,
+    rx: atomic::AtomicUsize,
     closed: atomic::AtomicBool,
 }
 
 impl Channel {
-    fn tx_add(&self) -> usize {
-        let idx = self.tx.0.fetch_add(1, atomic::Ordering::Relaxed);
-        let tx = self.tx.1.pin();
-        tx.insert(idx);
-        idx
+    #[inline(always)]
+    fn tx_add(&self) {
+        self.tx.fetch_add(1, atomic::Ordering::Relaxed);
     }
 
-    fn rx_add(&self) -> usize {
-        let idx = self.rx.0.fetch_add(1, atomic::Ordering::Relaxed);
-        let rx = self.rx.1.pin();
-        rx.insert(idx);
-        idx
+    #[inline(always)]
+    fn rx_add(&self) {
+        self.rx.fetch_add(1, atomic::Ordering::Relaxed);
     }
 
-    fn tx_rem(&self, idx: usize) {
-        let tx = self.tx.1.pin();
-        tx.remove(&idx);
-        if tx.is_empty() {
-            self.close();
+    #[inline(always)]
+    fn tx_rem(&self, py: Python) {
+        if self.tx.fetch_sub(1, atomic::Ordering::AcqRel) == 1 {
+            self.close(py);
         }
     }
 
-    fn rx_rem(&self, idx: usize) {
-        let rx = self.rx.1.pin();
-        rx.remove(&idx);
-        if rx.is_empty() {
-            self.close();
+    #[inline(always)]
+    fn rx_rem(&self, py: Python) {
+        if self.rx.fetch_sub(1, atomic::Ordering::AcqRel) == 1 {
+            self.close(py);
         }
     }
 
-    fn close(&self) {
+    fn close(&self, py: Python) {
         if self
             .closed
             .compare_exchange(false, true, atomic::Ordering::Release, atomic::Ordering::Relaxed)
             .is_ok()
         {
-            Python::attach(|py| {
-                let mut rx = self.rx_queue.lock().unwrap();
-                while let Some(event) = rx.pop_front() {
-                    event.get().set(py);
-                }
-            });
+            let mut waiters = {
+                let mut state = self.state.lock().unwrap();
+                std::mem::take(&mut state.waiters)
+            };
+            for event in waiters.drain(..) {
+                event.get().set(py);
+            }
         }
     }
 
-    fn push(&self, py: Python, message: Py<PyAny>) -> Py<Event> {
-        let want_pull = Py::new(py, Event::new()).unwrap();
+    #[inline]
+    fn push(&self, py: Python, message: Py<PyAny>) -> Option<Py<Event>> {
         let len = self.len.fetch_add(1, atomic::Ordering::Relaxed);
-        if len < self.size {
-            want_pull.get().set(py);
-        }
-        {
-            let mut tx = self.tx_queue.lock().unwrap();
-            tx.push_back((message, want_pull.clone_ref(py)));
-        }
-        if let Some(want_push) = {
-            let mut rx = self.rx_queue.lock().unwrap();
-            rx.pop_front()
-        } {
-            want_push.get().set(py);
+        let want_pull = (len >= self.size).then(|| Py::new(py, Event::new()).unwrap());
+        let want_push = {
+            let mut state = self.state.lock().unwrap();
+            state
+                .queue
+                .push_back((message, want_pull.as_ref().map(|event| event.clone_ref(py))));
+            state.waiters.pop_front()
+        };
+        if let Some(event) = want_push {
+            event.get().set(py);
         }
         want_pull
     }
 
-    fn pull(&self, py: Python) -> (Py<Event>, Option<Py<PyAny>>) {
+    #[inline]
+    fn pull(&self, py: Python) -> (Option<Py<Event>>, Option<Py<PyAny>>) {
         macro_rules! try_pull {
-            ($want_push:ident) => {
-                if let Some((message, want_pull)) = {
-                    match self.tx_queue.try_lock() {
-                        Ok(mut tx) => tx.pop_front(),
-                        _ => None,
-                    }
-                } {
+            ($state:ident) => {
+                if let Some((message, want_pull)) = $state.queue.pop_front() {
+                    drop($state);
                     self.len.fetch_sub(1, atomic::Ordering::Relaxed);
-                    $want_push.get().set(py);
-                    want_pull.get().set(py);
-                    return ($want_push, Some(message));
+                    if let Some(event) = want_pull {
+                        event.get().set(py);
+                    }
+                    return (None, Some(message));
+                }
+                if self.closed.load(atomic::Ordering::Acquire) {
+                    return (None, None);
                 }
             };
         }
 
-        let want_push = Py::new(py, Event::new()).unwrap();
-        //: fast path
-        try_pull!(want_push);
-        //: miss path, recheck `tx_queue` while holding `rx_queue` lock
-        let mut rx = self.rx_queue.lock().unwrap();
-        try_pull!(want_push);
-        if self.closed.load(atomic::Ordering::Acquire) {
-            want_push.get().set(py);
-        } else {
-            rx.push_back(want_push.clone_ref(py));
+        {
+            //: fast path
+            let mut state = self.state.lock().unwrap();
+            try_pull!(state);
         }
-        (want_push, None)
+
+        let want_push = Py::new(py, Event::new()).unwrap();
+        {
+            let mut state = self.state.lock().unwrap();
+            try_pull!(state);
+            state.waiters.push_back(want_push.clone_ref(py));
+        }
+        (Some(want_push), None)
     }
 }
 
+struct UnboundedChannelState {
+    queue: VecDeque<Py<PyAny>>,
+    waiters: VecDeque<Py<Event>>,
+}
+
 struct UnboundedChannel {
-    tx_queue: Mutex<VecDeque<Py<PyAny>>>,
-    rx_queue: Mutex<VecDeque<Py<Event>>>,
-    tx: (atomic::AtomicUsize, papaya::HashSet<usize>),
-    rx: (atomic::AtomicUsize, papaya::HashSet<usize>),
+    state: Mutex<UnboundedChannelState>,
+    tx: atomic::AtomicUsize,
+    rx: atomic::AtomicUsize,
     closed: atomic::AtomicBool,
 }
 
 impl UnboundedChannel {
-    fn tx_add(&self) -> usize {
-        let idx = self.tx.0.fetch_add(1, atomic::Ordering::Relaxed);
-        let tx = self.tx.1.pin();
-        tx.insert(idx);
-        idx
+    #[inline(always)]
+    fn tx_add(&self) {
+        self.tx.fetch_add(1, atomic::Ordering::Relaxed);
     }
 
-    fn rx_add(&self) -> usize {
-        let idx = self.rx.0.fetch_add(1, atomic::Ordering::Relaxed);
-        let rx = self.rx.1.pin();
-        rx.insert(idx);
-        idx
+    #[inline(always)]
+    fn rx_add(&self) {
+        self.rx.fetch_add(1, atomic::Ordering::Relaxed);
     }
 
-    fn tx_rem(&self, idx: usize) {
-        let tx = self.tx.1.pin();
-        tx.remove(&idx);
-        if tx.is_empty() {
-            self.close(None);
+    #[inline(always)]
+    fn tx_rem(&self, py: Python) {
+        if self.tx.fetch_sub(1, atomic::Ordering::AcqRel) == 1 {
+            self.close(py);
         }
     }
 
-    fn rx_rem(&self, idx: usize) {
-        let rx = self.rx.1.pin();
-        rx.remove(&idx);
-        if rx.is_empty() {
-            self.close(None);
+    #[inline(always)]
+    fn rx_rem(&self, py: Python) {
+        if self.rx.fetch_sub(1, atomic::Ordering::AcqRel) == 1 {
+            self.close(py);
         }
     }
 
+    #[inline]
     fn push(&self, py: Python, message: Py<PyAny>) {
-        {
-            let mut tx = self.tx_queue.lock().unwrap();
-            tx.push_back(message);
-        }
-        if let Some(event) = {
-            let mut rx = self.rx_queue.lock().unwrap();
-            rx.pop_front()
-        } {
+        let want_push = {
+            let mut state = self.state.lock().unwrap();
+            state.queue.push_back(message);
+            state.waiters.pop_front()
+        };
+        if let Some(event) = want_push {
             event.get().set(py);
         }
     }
 
-    fn pull(&self, py: Python) -> (Py<Event>, Option<Py<PyAny>>, bool) {
-        let mut closed = false;
+    #[inline]
+    fn pull(&self, py: Python) -> (Option<Py<Event>>, Option<Py<PyAny>>) {
+        macro_rules! try_pull {
+            ($state:ident) => {
+                if let Some(message) = $state.queue.pop_front() {
+                    return (None, Some(message));
+                }
+                if self.closed.load(atomic::Ordering::Acquire) {
+                    return (None, None);
+                }
+            };
+        }
+
+        {
+            //: fast path
+            let mut state = self.state.lock().unwrap();
+            try_pull!(state);
+        }
+
         let want_push = Py::new(py, Event::new()).unwrap();
-        //: lock `rx_queue` so we have only 1 receiver at time in the following section
-        let mut rx = self.rx_queue.lock().unwrap();
-        if let Some(message) = match self.tx_queue.try_lock() {
-            //: if the `tx_queue` lock acq fails, senders are writing
-            Ok(mut data) => data.pop_front(),
-            _ => None,
-        } {
-            return (want_push, Some(message), closed);
+        {
+            let mut state = self.state.lock().unwrap();
+            try_pull!(state);
+            state.waiters.push_back(want_push.clone_ref(py));
         }
-        if self.closed.load(atomic::Ordering::Acquire) {
-            want_push.get().set(py);
-            closed = true;
-        } else {
-            rx.push_back(want_push.clone_ref(py));
-        }
-        (want_push, None, closed)
+        (Some(want_push), None)
     }
 
-    fn close(&self, py: Option<Python>) {
-        // TODO: change to always acquire python interpreter instead of arg?
+    fn close(&self, py: Python) {
         if self
             .closed
             .compare_exchange(false, true, atomic::Ordering::Release, atomic::Ordering::Relaxed)
             .is_ok()
-            && let Some(py) = py
         {
-            let mut rx = self.rx_queue.lock().unwrap();
-            while let Some(event) = rx.pop_front() {
+            let mut waiters = {
+                let mut state = self.state.lock().unwrap();
+                std::mem::take(&mut state.waiters)
+            };
+            for event in waiters.drain(..) {
                 event.get().set(py);
             }
         }
@@ -422,10 +426,12 @@ impl PyChannel {
             inner: Arc::new(Channel {
                 size,
                 len: 0.into(),
-                tx_queue: Mutex::new(VecDeque::new()),
-                rx_queue: Mutex::new(VecDeque::new()),
-                tx: (0.into(), papaya::HashSet::new()),
-                rx: (0.into(), papaya::HashSet::new()),
+                state: Mutex::new(ChannelState {
+                    queue: VecDeque::new(),
+                    waiters: VecDeque::new(),
+                }),
+                tx: 0.into(),
+                rx: 0.into(),
                 closed: false.into(),
             }),
         }
@@ -443,10 +449,12 @@ impl PyUnboundedChannel {
     fn new() -> Self {
         Self {
             inner: Arc::new(UnboundedChannel {
-                tx_queue: Mutex::new(VecDeque::new()),
-                rx_queue: Mutex::new(VecDeque::new()),
-                tx: (0.into(), papaya::HashSet::new()),
-                rx: (0.into(), papaya::HashSet::new()),
+                state: Mutex::new(UnboundedChannelState {
+                    queue: VecDeque::new(),
+                    waiters: VecDeque::new(),
+                }),
+                tx: 0.into(),
+                rx: 0.into(),
                 closed: false.into(),
             }),
         }
@@ -456,7 +464,6 @@ impl PyUnboundedChannel {
 #[pyclass(frozen, subclass, module = "tonio._tonio")]
 struct ChannelSender {
     channel: Arc<Channel>,
-    id: usize,
 }
 
 #[pymethods]
@@ -464,20 +471,17 @@ impl ChannelSender {
     #[new]
     fn new(channel: Py<PyChannel>) -> Self {
         let inner = &channel.get().inner;
-        let id = inner.tx_add();
-        Self {
-            channel: inner.clone(),
-            id,
-        }
+        inner.tx_add();
+        Self { channel: inner.clone() }
     }
 
     // TODO: clone
 
-    fn close(&self) {
-        self.channel.close();
+    fn close(&self, py: Python) {
+        self.channel.close(py);
     }
 
-    fn _send(&self, py: Python, message: Py<PyAny>) -> PyResult<Py<Event>> {
+    fn _send(&self, py: Python, message: Py<PyAny>) -> PyResult<Option<Py<Event>>> {
         if self.channel.closed.load(atomic::Ordering::Acquire) {
             return Err(pyo3::exceptions::PyBrokenPipeError::new_err("channel closed"));
         }
@@ -487,14 +491,13 @@ impl ChannelSender {
 
 impl Drop for ChannelSender {
     fn drop(&mut self) {
-        self.channel.tx_rem(self.id);
+        Python::attach(|py| self.channel.tx_rem(py));
     }
 }
 
 #[pyclass(frozen, subclass, module = "tonio._tonio")]
 struct ChannelReceiver {
     channel: Arc<Channel>,
-    id: usize,
 }
 
 #[pymethods]
@@ -502,42 +505,30 @@ impl ChannelReceiver {
     #[new]
     fn new(channel: Py<PyChannel>) -> Self {
         let inner = &channel.get().inner;
-        let id = inner.rx_add();
-        Self {
-            channel: channel.get().inner.clone(),
-            id,
-        }
+        inner.rx_add();
+        Self { channel: inner.clone() }
     }
 
     // TODO: clone
 
-    fn _receive(&self, py: Python) -> PyResult<(Py<Event>, bool, Option<Py<PyAny>>)> {
-        let (event, message) = self.channel.pull(py);
-        if message.is_some() {
-            return Ok((event, false, message));
+    fn _receive(&self, py: Python) -> PyResult<(Option<Py<Event>>, bool, Option<Py<PyAny>>)> {
+        match self.channel.pull(py) {
+            (event @ Some(_), None) => Ok((event, true, None)),
+            (None, message @ Some(_)) => Ok((None, false, message)),
+            _ => Err(pyo3::exceptions::PyBrokenPipeError::new_err("channel closed")),
         }
-        if self.channel.closed.load(atomic::Ordering::Acquire) {
-            if let Some((message, want_pull)) = self.channel.tx_queue.lock().unwrap().pop_front() {
-                self.channel.len.fetch_sub(1, atomic::Ordering::Relaxed);
-                want_pull.get().set(py);
-                return Ok((event, false, Some(message)));
-            }
-            return Err(pyo3::exceptions::PyBrokenPipeError::new_err("channel closed"));
-        }
-        Ok((event, true, None))
     }
 }
 
 impl Drop for ChannelReceiver {
     fn drop(&mut self) {
-        self.channel.rx_rem(self.id);
+        Python::attach(|py| self.channel.rx_rem(py));
     }
 }
 
 #[pyclass(frozen, subclass, module = "tonio._tonio")]
 struct UnboundedChannelSender {
     channel: Arc<UnboundedChannel>,
-    id: usize,
 }
 
 #[pymethods]
@@ -545,11 +536,8 @@ impl UnboundedChannelSender {
     #[new]
     fn new(channel: Py<PyUnboundedChannel>) -> Self {
         let inner = &channel.get().inner;
-        let id = inner.tx_add();
-        Self {
-            channel: inner.clone(),
-            id,
-        }
+        inner.tx_add();
+        Self { channel: inner.clone() }
     }
 
     // TODO: clone
@@ -563,20 +551,19 @@ impl UnboundedChannelSender {
     }
 
     fn close(&self, py: Python) {
-        self.channel.close(Some(py));
+        self.channel.close(py);
     }
 }
 
 impl Drop for UnboundedChannelSender {
     fn drop(&mut self) {
-        self.channel.tx_rem(self.id);
+        Python::attach(|py| self.channel.tx_rem(py));
     }
 }
 
 #[pyclass(frozen, subclass, module = "tonio._tonio")]
 struct UnboundedChannelReceiver {
     channel: Arc<UnboundedChannel>,
-    id: usize,
 }
 
 #[pymethods]
@@ -584,33 +571,24 @@ impl UnboundedChannelReceiver {
     #[new]
     fn new(channel: Py<PyUnboundedChannel>) -> Self {
         let inner = &channel.get().inner;
-        let id = inner.rx_add();
-        Self {
-            channel: inner.clone(),
-            id,
-        }
+        inner.rx_add();
+        Self { channel: inner.clone() }
     }
 
     // TODO: clone
 
-    fn _receive(&self, py: Python) -> PyResult<(Py<Event>, bool, Option<Py<PyAny>>)> {
-        let (event, message, closed) = self.channel.pull(py);
-        if let Some(message) = message {
-            return Ok((event, false, Some(message)));
+    fn _receive(&self, py: Python) -> PyResult<(Option<Py<Event>>, bool, Option<Py<PyAny>>)> {
+        match self.channel.pull(py) {
+            (event @ Some(_), None) => Ok((event, true, None)),
+            (None, message @ Some(_)) => Ok((None, false, message)),
+            _ => Err(pyo3::exceptions::PyBrokenPipeError::new_err("channel closed")),
         }
-        if closed {
-            if let Some(message) = self.channel.tx_queue.lock().unwrap().pop_front() {
-                return Ok((event, false, Some(message)));
-            }
-            return Err(pyo3::exceptions::PyBrokenPipeError::new_err("channel closed"));
-        }
-        Ok((event, true, None))
     }
 }
 
 impl Drop for UnboundedChannelReceiver {
     fn drop(&mut self) {
-        self.channel.rx_rem(self.id);
+        Python::attach(|py| self.channel.rx_rem(py));
     }
 }
 

@@ -49,7 +49,8 @@ class Barrier(_Barrier):
 
 class ChannelSender(_ChannelSender):
     async def send(self, message) -> None:
-        await self._send(message).waiter(None)
+        if (event := self._send(message)) is not None:
+            await event.waiter(None)
 
 
 class ChannelReceiver(_ChannelReceiver):
