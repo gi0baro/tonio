@@ -950,12 +950,12 @@ Both objects implement a `close` method to shutdown the underlying socket.
 You can create and interact with the above objects using some high-level helpers in the `net` module, specifically:
 
 - `open_tcp_stream`: a coroutine to open a `SocketStream` connected to a TCP endpoint
-- `open_unix_socket`: a coroutine to open a `SocketStream` connected to an Unix socket
+- `open_unix_socket`: a coroutine to open a `SocketStream` connected to a Unix socket
 - `open_tcp_listeners`: a coroutine to initialise `SocketListener` objects
-- `open_unix_listener`: a coroutine to initialise a `SocketListener` on an Unix socket path
+- `open_unix_listener`: a coroutine to initialise a `SocketListener` on a Unix socket path
 - `serve_listeners`: a coroutine to spawn `SocketListener` accept loops targeting a handler
-- `serve_tcp`: a coroutine that join `open_tcp_listener` and `serve_listeners` in one call
-- `serve_unix`: a coroutine that join `open_unix_listener` and `serve_listeners` in one call
+- `serve_tcp`: a coroutine that joins `open_tcp_listeners` and `serve_listeners` in one call
+- `serve_unix`: a coroutine that joins `open_unix_listener` and `serve_listeners` in one call
 
 <table><tr><td>
 
@@ -1063,7 +1063,7 @@ TonIO provides the `TLSStream` and `TLSListener` object wrappers and the followi
 
 - `open_tls_over_tcp_stream`: a coroutine to open a `TLSStream` wrapping a TCP `SocketStream`
 - `open_tls_over_tcp_listeners`: a coroutine to initialise `TLSListener` objects
-- `serve_tls_over_tcp`: a coroutine that join `open_tls_over_tcp_listeners` and `serve_listeners` in one call
+- `serve_tls_over_tcp`: a coroutine that joins `open_tls_over_tcp_listeners` and `serve_listeners` in one call
 
 #### Low-level sockets
 
@@ -1379,6 +1379,15 @@ async def main():
         await ticker.tick()
 ```
 </td></tr></table>
+
+## Libraries built on TonIO
+
+In addition to the patches provided by the [TonIO-Monkey](https://github.com/gi0baro/tonio-monkey) project,
+the following libraries target TonIO natively:
+
+- [httpunk](https://github.com/gi0baro/httpunk): a low-level async HTTP library
+- [punkreq](https://github.com/gi0baro/punkreq): a high-level async HTTP client
+- [toncorn](https://github.com/gi0baro/toncorn): a [uvicorn](https://github.com/Kludex/uvicorn) fork built on TonIO
 
 ## License
 
