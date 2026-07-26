@@ -81,7 +81,7 @@ class Runtime(_Runtime):
             try:
                 ret = yield coro
                 res.store(ret)
-            except Exception as exc:
+            except BaseException as exc:
                 is_exc = True
                 res.store(exc)
             finally:
@@ -110,7 +110,7 @@ class Runtime(_Runtime):
             try:
                 ret = await coro
                 res.store(ret)
-            except Exception as exc:
+            except BaseException as exc:
                 is_exc = True
                 res.store(exc)
             finally:
