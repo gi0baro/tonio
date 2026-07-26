@@ -138,11 +138,19 @@ def block_on(coro: Coro[_T]) -> _T:
 
 
 def map(fn: Callable[[_T], _Return], /, xs: Iterable[_T]) -> Coro[list[_Return]]:
-    return spawn(*[fn(x) for x in xs])
+    tasks = [fn(x) for x in xs]
+    ret = yield spawn(*tasks)
+    if len(tasks) == 1:
+        return [ret]
+    return ret
 
 
 def map_blocking(fn: Callable[[_T], _Return], /, xs: Iterable[_T]) -> Coro[list[_Return]]:
-    return spawn(*[spawn_blocking(fn, x) for x in xs])
+    tasks = [spawn_blocking(fn, x) for x in xs]
+    ret = yield spawn(*tasks)
+    if len(tasks) == 1:
+        return [ret]
+    return ret
 
 
 def as_completed(*coros: Coro):

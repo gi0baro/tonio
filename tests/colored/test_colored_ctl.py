@@ -61,6 +61,25 @@ def test_select_events(run):
     assert set(exe) == {1}
 
 
+def test_map(run):
+    async def _coro(v):
+        await tonio.yield_now()
+        return v
+
+    async def _run0():
+        return await tonio.map(_coro, [])
+
+    async def _run1():
+        return await tonio.map(_coro, [1])
+
+    async def _runn(n):
+        return await tonio.map(_coro, range(n))
+
+    assert run(_run0()) == []
+    assert run(_run1()) == [1]
+    assert run(_runn(3)) == [0, 1, 2]
+
+
 def test_as_completed(run):
     async def _sleep(x):
         await tonio.sleep(x)

@@ -158,12 +158,20 @@ def block_on(coro):
     return val
 
 
-def map(fn: Callable[[_T], _Return], /, xs: Iterable[_T]) -> Awaitable[list[_Return]]:
-    return spawn(*[fn(x) for x in xs])
+async def map(fn: Callable[[_T], _Return], /, xs: Iterable[_T]) -> list[_Return]:
+    tasks = [fn(x) for x in xs]
+    ret = await spawn(*tasks)
+    if len(tasks) == 1:
+        return [ret]
+    return ret
 
 
-def map_blocking(fn: Callable[[_T], _Return], /, xs: Iterable[_T]) -> Awaitable[list[_Return]]:
-    return spawn(*[spawn_blocking(fn, x) for x in xs])
+async def map_blocking(fn: Callable[[_T], _Return], /, xs: Iterable[_T]) -> list[_Return]:
+    tasks = [spawn_blocking(fn, x) for x in xs]
+    ret = await spawn(*tasks)
+    if len(tasks) == 1:
+        return [ret]
+    return ret
 
 
 async def as_completed(*coros):
