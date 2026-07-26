@@ -1132,6 +1132,191 @@ async def client():
 ```
 </td></tr></table>
 
+### Filesystem module
+
+TonIO's `fs` module exposes async API for filesystem operations (that are run in the blocking thread-pool).
+It provides `open`, a `Path` class mirroring `pathlib.Path`, and `wrap_file` to
+adopt an already-open file object.
+
+<table><tr><td>
+
+`yield` syntax
+
+```python
+import tonio
+import tonio.fs as fs
+
+def main():
+    f = yield fs.open('data.txt', 'w')
+    yield f.write('hello')
+    yield f.close()
+
+    path = fs.Path('data.txt')
+    if (yield path.exists()):
+        print((yield path.read_text()))
+
+    for entry in (yield fs.Path('.').iterdir()):
+        print(entry.name)
+```
+</td><td>
+
+`await` syntax
+
+```python
+import tonio.colored as tonio
+import tonio.colored.fs as fs
+
+async def main():
+    async with await fs.open('data.txt', 'w') as f:
+        await f.write('hello')
+
+    path = fs.Path('data.txt')
+    if await path.exists():
+        print(await path.read_text())
+
+    for entry in await fs.Path('.').iterdir():
+        print(entry.name)
+```
+</td></tr></table>
+
+Operations that touch the filesystem are asynchronous; everything else stays synchronous.
+
+> **Note:** methods returning several paths (`iterdir`, `glob`, `rglob`, `walk`) are resolved in a single hop and give back a `list`. Since `walk` is fully materialised, mutating its `dirnames` does not prune the traversal, unlike `pathlib.Path.walk`.
+
+Reading a file line by line differs between the two flavours. The `await` syntax supports `async for`
+and `async with`, neither of which the `yield` syntax can express:
+
+<table><tr><td>
+
+`yield` syntax
+
+```python
+def read_lines(path):
+    f = yield fs.open(path, 'r')
+    try:
+        while True:
+            line = yield f.readline()
+            if not line:
+                break
+            print(line)
+    finally:
+        yield f.close()
+```
+</td><td>
+
+`await` syntax
+
+```python
+async def read_lines(path):
+    async with await fs.open(path, 'r') as f:
+        async for line in f:
+            print(line)
+```
+</td></tr></table>
+
+### Subprocesses
+
+TonIO exposes two coroutines to run child processes: `run_process` for the common
+"run it and collect the outcome" case, and `open_process` for interacting with a process while it
+runs. Both spawn the process on the blocking thread-pool.
+
+`run_process` returns a `subprocess.CompletedProcess` and accepts:
+
+- `stdin`: bytes to feed to the child (defaults to `b''`, meaning "close stdin immediately"), or a file descriptor/`subprocess` constant
+- `capture_stdout` / `capture_stderr`: when true, the relevant stream is collected and available on the result
+- `check`: when true (the default), a non-zero exit code raises `subprocess.CalledProcessError`
+
+Any other keyword argument is forwarded to `subprocess.Popen`.
+
+<table><tr><td>
+
+`yield` syntax
+
+```python
+import tonio
+
+def main():
+    result = yield tonio.run_process(
+        ['echo', 'hello'],
+        capture_stdout=True
+    )
+    print(result.returncode)
+    print(result.stdout)
+```
+</td><td>
+
+`await` syntax
+
+```python
+import tonio.colored as tonio
+
+async def main():
+    result = await tonio.run_process(
+        ['echo', 'hello'],
+        capture_stdout=True
+    )
+    print(result.returncode)
+    print(result.stdout)
+```
+</td></tr></table>
+
+`open_process` returns a `Process` object instead, giving access to the running child. Passing
+`subprocess.PIPE` for `stdin`, `stdout` or `stderr` exposes the corresponding pipe as a stream on the
+process object, implementing the same `send_all` and `receive_some` coroutines of network streams:
+
+<table><tr><td>
+
+`yield` syntax
+
+```python
+import subprocess
+import tonio
+
+def main():
+    proc = yield tonio.open_process(
+        ['cat'],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE
+    )
+    yield proc.stdin.send_all(b'hello')
+    proc.stdin.close()
+    data = yield proc.stdout.receive_some()
+    code = yield proc.wait()
+```
+</td><td>
+
+`await` syntax
+
+```python
+import subprocess
+import tonio.colored as tonio
+
+async def main():
+    proc = await tonio.open_process(
+        ['cat'],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE
+    )
+    await proc.stdin.send_all(b'hello')
+    proc.stdin.close()
+    data = await proc.stdout.receive_some()
+    code = await proc.wait()
+```
+</td></tr></table>
+
+The `Process` object exposes:
+
+- `args` and `pid`: the command and the process identifier
+- `stdin`, `stdout`, `stderr`: the piped streams, or `None` when not piped
+- `stdio`: a `(stdin, stdout)` tuple, when both are piped
+- `returncode` and `poll()`: the exit code, or `None` while the process is still running
+- `wait`: a coroutine waiting for the process to exit, returning its exit code
+- `send_signal`, `terminate`, `kill`: synchronous methods to signal the process
+
+> **Note:** unlike `run_process`, `open_process` does not reap the child for you: remember to `wait` on it — possibly after a `kill` — otherwise the child outlives your task.
+
+> **Note:** processes in TonIO only communicate over unbuffered byte streams: the `universal_newlines`, `text`, `encoding`, `errors` and `bufsize` options of `subprocess` are not supported.
+
 ### Signals
 
 TonIO provides a context manager to catch signals.
