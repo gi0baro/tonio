@@ -70,9 +70,10 @@ class FdStream(_Stream):
 
                             try:
                                 sent += os.write(fd, remaining)
-                            except BlockingIOError, InterruptedError:
+                            except InterruptedError:
+                                pass
+                            except BlockingIOError:
                                 self._fd._io_clear_w()
-                                continue
                             except BrokenPipeError as exc:
                                 raise ResourceBroken from exc
                             except BaseException as exc:
@@ -94,9 +95,10 @@ class FdStream(_Stream):
 
                 try:
                     data = os.read(fd, max_bytes)
-                except BlockingIOError, InterruptedError:
+                except InterruptedError:
+                    pass
+                except BlockingIOError:
                     self._fd._io_clear_r()
-                    continue
                 except BaseException as exc:
                     raise exc
                 else:

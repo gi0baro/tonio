@@ -53,9 +53,10 @@ class _Socket(_socket._Socket):
 
             try:
                 conn, address = self._sock.accept()
-            except BlockingIOError, InterruptedError:
+            except InterruptedError:
+                pass
+            except BlockingIOError:
                 self._io_clear_r()
-                continue
             except BaseException as exc:
                 raise exc
             else:
@@ -102,9 +103,10 @@ class _Socket(_socket._Socket):
 
             try:
                 ret = self._sock.recv(bufsize, flags)
-            except BlockingIOError, InterruptedError:
+            except InterruptedError:
+                pass
+            except BlockingIOError:
                 self._io_clear_r()
-                continue
             except BaseException as exc:
                 raise exc
             else:
@@ -120,9 +122,10 @@ class _Socket(_socket._Socket):
 
             try:
                 ret = self._sock.recv_into(buffer, nbytes, flags)
-            except BlockingIOError, InterruptedError:
+            except InterruptedError:
+                pass
+            except BlockingIOError:
                 self._io_clear_r()
-                continue
             except BaseException as exc:
                 raise exc
             else:
@@ -138,9 +141,10 @@ class _Socket(_socket._Socket):
 
             try:
                 ret = self._sock.recvfrom(bufsize, flags)
-            except BlockingIOError, InterruptedError:
+            except InterruptedError:
+                pass
+            except BlockingIOError:
                 self._io_clear_r()
-                continue
             except BaseException as exc:
                 raise exc
             else:
@@ -156,9 +160,10 @@ class _Socket(_socket._Socket):
 
             try:
                 ret = self._sock.recvfrom_into(buffer, nbytes, flags)
-            except BlockingIOError, InterruptedError:
+            except InterruptedError:
+                pass
+            except BlockingIOError:
                 self._io_clear_r()
-                continue
             except BaseException as exc:
                 raise exc
             else:
@@ -182,9 +187,10 @@ class _Socket(_socket._Socket):
 
                 try:
                     ret = self._sock.recvmsg(bufsize, ancbufsize, flags)
-                except BlockingIOError, InterruptedError:
+                except InterruptedError:
+                    pass
+                except BlockingIOError:
                     self._io_clear_r()
-                    continue
                 except BaseException as exc:
                     raise exc
                 else:
@@ -205,9 +211,10 @@ class _Socket(_socket._Socket):
                     continue
                 try:
                     ret = self._sock.recvmsg_into(buffers, ancbufsize, flags)
-                except BlockingIOError, InterruptedError:
+                except InterruptedError:
+                    pass
+                except BlockingIOError:
                     self._io_clear_r()
-                    continue
                 except BaseException as exc:
                     raise exc
                 else:
@@ -231,9 +238,10 @@ class _Socket(_socket._Socket):
 
             try:
                 ret = self._sock.send(data, flags)
-            except BlockingIOError, InterruptedError:
+            except InterruptedError:
+                pass
+            except BlockingIOError:
                 self._io_clear_w()
-                continue
             except BaseException as exc:
                 raise exc
             else:
@@ -258,9 +266,10 @@ class _Socket(_socket._Socket):
 
             try:
                 ret = self._sock.sendto(data, address)
-            except BlockingIOError, InterruptedError:
+            except InterruptedError:
+                pass
+            except BlockingIOError:
                 self._io_clear_w()
-                continue
             except BaseException as exc:
                 raise exc
             else:
@@ -292,9 +301,10 @@ class _Socket(_socket._Socket):
 
                 try:
                     ret = self._sock.sendmsg(buffers, ancdata, flags, address)
-                except BlockingIOError, InterruptedError:
+                except InterruptedError:
+                    pass
+                except BlockingIOError:
                     self._io_clear_w()
-                    continue
                 except BaseException as exc:
                     raise exc
                 else:
