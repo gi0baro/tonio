@@ -11,7 +11,7 @@ import os
 import socket as _stdlib_socket
 import ssl as _stdlib_ssl
 import sys
-from typing import Any
+from typing import Any, Awaitable
 
 from ..._net._hilvl import (
     _accept_retry_errnos,
@@ -186,10 +186,10 @@ async def open_unix_listener(
         return SocketListener(sock)
 
 
-async def serve_listeners(
+def serve_listeners(
     handler: Any,
     listeners: list[SocketListener],
-) -> None:
+) -> Awaitable[None]:
     async def _listener_handler(listener: SocketListener):
         with listener:
             while True:
