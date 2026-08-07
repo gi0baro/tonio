@@ -290,7 +290,7 @@ dependencies = [
 
 [[package]]
 name = "tonio"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "anyhow",
  "arc-swap",
