@@ -163,13 +163,13 @@ impl BlockingTask {
 
         let res = unsafe {
             let ctx = self.ctx.as_ref().map(Py::as_ptr);
-            let callable = self.target.into_ptr();
-            let args = self.args.into_ptr();
+            let callable = self.target.as_ptr();
+            let args = self.args.as_ptr();
             if let Some(ctx) = ctx {
                 pyo3::ffi::PyContext_Enter(ctx);
             }
-            let ret = match self.kwargs {
-                Some(kw) => pyo3::ffi::PyObject_Call(callable, args, kw.into_ptr()),
+            let ret = match &self.kwargs {
+                Some(kw) => pyo3::ffi::PyObject_Call(callable, args, kw.as_ptr()),
                 None => pyo3::ffi::PyObject_CallObject(callable, args),
             };
             if let Some(ctx) = ctx {
@@ -194,7 +194,7 @@ pub(crate) struct BlockingRunnerPool {
     threads: Arc<atomic::AtomicUsize>,
     tmax: usize,
     idle_timeout: time::Duration,
-    load: Arc<atomic::AtomicIsize>,
+    budget: Arc<atomic::AtomicIsize>,
 }
 
 impl BlockingRunnerPool {
@@ -206,7 +206,7 @@ impl BlockingRunnerPool {
             threads: Arc::new(0.into()),
             tmax: max_threads,
             idle_timeout: time::Duration::from_secs(idle_timeout),
-            load: Arc::new(0.into()),
+            budget: Arc::new(0.into()),
         }
     }
 
@@ -219,16 +219,17 @@ impl BlockingRunnerPool {
 
         let queue = self.tq.clone();
         let timeout = self.idle_timeout;
-        let load = self.load.clone();
+        let budget = self.budget.clone();
         let tcount = self.threads.clone();
-        thread::spawn(move || blocking_worker(queue, timeout, load, tcount));
+        thread::spawn(move || blocking_worker(queue, timeout, budget, tcount));
     }
 
     #[inline]
     pub fn run(&self, task: BlockingTask) -> Result<(), channel::SendError<BlockingTask>> {
         self.queue.send(task)?;
-        let threads = self.threads.load(atomic::Ordering::SeqCst);
-        if self.load.fetch_add(1, atomic::Ordering::Relaxed) >= 0 && threads < self.tmax {
+        if self.budget.fetch_sub(1, atomic::Ordering::AcqRel) <= 0
+            && self.threads.load(atomic::Ordering::SeqCst) < self.tmax
+        {
             self.spawn_thread();
         }
         Ok(())
@@ -238,20 +239,21 @@ impl BlockingRunnerPool {
 fn blocking_worker(
     queue: channel::Receiver<BlockingTask>,
     timeout: time::Duration,
-    load: Arc<atomic::AtomicIsize>,
+    pbudget: Arc<atomic::AtomicIsize>,
     tcount: Arc<atomic::AtomicUsize>,
 ) {
     Python::attach(|py| {
         let tid = crate::py::thread_ident(py).unwrap();
 
         while let Ok(task) = py.detach(|| {
-            load.fetch_sub(1, atomic::Ordering::Relaxed);
+            pbudget.fetch_add(1, atomic::Ordering::AcqRel);
             let mut res = queue.recv_timeout(timeout);
-            load.fetch_add(1, atomic::Ordering::Relaxed);
             if res.is_err() {
+                pbudget.fetch_sub(1, atomic::Ordering::AcqRel);
                 tcount.fetch_sub(1, atomic::Ordering::SeqCst);
                 if let Ok(task) = queue.try_recv() {
                     tcount.fetch_add(1, atomic::Ordering::SeqCst);
+                    pbudget.fetch_add(1, atomic::Ordering::AcqRel);
                     res = Ok(task);
                 }
             }
