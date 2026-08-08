@@ -280,6 +280,14 @@ impl Waiter {
             checkpoint.error(py, crate::get_runtime(py).unwrap().get(), abort());
         }
     }
+
+    pub(crate) fn clear_gensuspension(&self) {
+        self.checkpoint_gen.store(None);
+    }
+
+    pub(crate) fn clear_asyngensuspension(&self) {
+        self.checkpoint_asyncgen.store(None);
+    }
 }
 
 #[pymethods]
@@ -527,6 +535,12 @@ impl PyGenSuspension {
     }
 
     fn to_handle(&self, py: Python, value: Py<PyAny>) -> BoxedHandle {
+        if self.is_checkpoint
+            && let Some(checkpoint) = &self.checkpoint
+        {
+            checkpoint.get().clear_gensuspension();
+        }
+
         match &self.target {
             SuspensionTarget::Gen(target) => {
                 let handle = handles::PyGenHandle {
@@ -550,6 +564,12 @@ impl PyGenSuspension {
     }
 
     fn to_throw_handle(&self, py: Python, err: PyErr) -> BoxedHandle {
+        if self.is_checkpoint
+            && let Some(checkpoint) = &self.checkpoint
+        {
+            checkpoint.get().clear_gensuspension();
+        }
+
         let value = err.into_value(py).as_any().clone_ref(py);
         match &self.target {
             SuspensionTarget::Gen(target) => {
@@ -671,6 +691,10 @@ impl PyAsyncGenSuspension {
     }
 
     fn to_throw_handle(&self, py: Python, err: PyErr) -> BoxedHandle {
+        if let Some(checkpoint) = &self.checkpoint {
+            checkpoint.get().clear_asyngensuspension();
+        }
+
         let value = err.into_value(py).as_any().clone_ref(py);
         match &self.target {
             SuspensionTarget::AsyncGen(target) => {

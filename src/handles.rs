@@ -203,6 +203,13 @@ impl PyAsyncGenHandle {
         }
     }
 
+    #[inline(always)]
+    fn clear_checkpoint(&self) {
+        if let Some(checkpoint) = &self.checkpoint {
+            checkpoint.get().clear_asyngensuspension();
+        }
+    }
+
     #[inline]
     fn call(self: Box<Self>, py: Python, runtime: &Py<Runtime>) {
         unsafe {
@@ -230,11 +237,15 @@ impl PyAsyncGenHandle {
                     }
                 }
                 pyo3::ffi::PySendResult::PYGEN_ERROR => {
+                    self.clear_checkpoint();
+
                     let err = pyo3::PyErr::fetch(py);
                     println!("UNHANDLED PYASYNCGEN_ERROR {:?}", self.coro.bind(py));
                     err.display(py);
                 }
-                pyo3::ffi::PySendResult::PYGEN_RETURN => {}
+                pyo3::ffi::PySendResult::PYGEN_RETURN => {
+                    self.clear_checkpoint();
+                }
             }
         }
     }
@@ -260,6 +271,13 @@ impl PyAsyncGenCtxHandle {
             ctx,
             value: py.None(),
             checkpoint: None,
+        }
+    }
+
+    #[inline(always)]
+    fn clear_checkpoint(&self) {
+        if let Some(checkpoint) = &self.checkpoint {
+            checkpoint.get().clear_asyngensuspension();
         }
     }
 
@@ -294,11 +312,15 @@ impl PyAsyncGenCtxHandle {
                     }
                 }
                 pyo3::ffi::PySendResult::PYGEN_ERROR => {
+                    self.clear_checkpoint();
+
                     let err = pyo3::PyErr::fetch(py);
                     println!("UNHANDLED PYASYNCGEN_ERROR {:?}", self.coro.bind(py));
                     err.display(py);
                 }
-                pyo3::ffi::PySendResult::PYGEN_RETURN => {}
+                pyo3::ffi::PySendResult::PYGEN_RETURN => {
+                    self.clear_checkpoint();
+                }
             }
         }
     }
