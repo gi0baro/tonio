@@ -15,6 +15,7 @@ use crate::{
 pub(crate) struct Event {
     flag: atomic::AtomicBool,
     watchers: Mutex<VecDeque<Waker>>,
+    dirty: atomic::AtomicBool,
 }
 
 impl Event {
@@ -24,6 +25,7 @@ impl Event {
         while let Some(waker) = guard.pop_front() {
             waker.wake(py);
         }
+        self.dirty.store(false, atomic::Ordering::Relaxed);
     }
 
     fn unnotify(&self) {
@@ -41,6 +43,18 @@ impl Event {
             return;
         }
         guard.push_back(waker);
+        self.dirty.store(true, atomic::Ordering::Relaxed);
+    }
+
+    #[inline]
+    fn rem_stale_wakers(&self) {
+        let mut guard = self.watchers.lock().unwrap();
+        while guard.back().is_some_and(|waker| waker.target.is_dead()) {
+            guard.pop_back();
+        }
+        if guard.is_empty() {
+            self.dirty.store(false, atomic::Ordering::Relaxed);
+        }
     }
 }
 
@@ -50,6 +64,7 @@ impl Event {
     pub(crate) fn new() -> Self {
         Self {
             flag: false.into(),
+            dirty: false.into(),
             watchers: Mutex::new(VecDeque::new()),
         }
     }
@@ -80,6 +95,10 @@ impl Event {
 
     // TODO: timeout resolution should be micros!
     fn waiter(pyself: Py<Self>, py: Python, timeout: Option<usize>) -> Py<Waiter> {
+        let rself = pyself.get();
+        if rself.dirty.load(atomic::Ordering::Relaxed) {
+            rself.rem_stale_wakers();
+        }
         Waiter::from_event(py, pyself, timeout)
     }
 }
@@ -434,6 +453,15 @@ impl Suspension {
         match self {
             Self::Gen(inner) => inner.suspend(),
             Self::AsyncGen(inner) => inner.suspend(),
+        }
+    }
+
+    fn is_dead(&self) -> bool {
+        match self {
+            Self::Gen(inner) => inner.consumed.load(atomic::Ordering::Acquire),
+            Self::AsyncGen(inner) => {
+                inner.consumed.load(atomic::Ordering::Acquire) || inner.aborted.load(atomic::Ordering::Acquire)
+            }
         }
     }
 }
