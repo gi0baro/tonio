@@ -69,24 +69,28 @@ impl Event {
         }
     }
 
-    pub(crate) fn set(&self, py: Python) {
+    pub(crate) fn set(&self, py: Python) -> bool {
         if self
             .flag
             .compare_exchange(false, true, atomic::Ordering::Release, atomic::Ordering::Relaxed)
             .is_ok()
         {
             self.notify(py);
+            return true;
         }
+        false
     }
 
-    pub(crate) fn clear(&self) {
+    pub(crate) fn clear(&self) -> bool {
         if self
             .flag
             .compare_exchange(true, false, atomic::Ordering::Release, atomic::Ordering::Relaxed)
             .is_ok()
         {
             self.unnotify();
+            return true;
         }
+        false
     }
 
     pub(crate) fn is_set(&self) -> bool {

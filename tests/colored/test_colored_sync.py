@@ -1,6 +1,6 @@
 import pytest
 
-from tonio.colored import spawn, sync, yield_now
+from tonio.colored import Event, scope, spawn, sync, time, yield_now
 from tonio.colored.sync import channel
 
 
@@ -34,6 +34,46 @@ def test_semaphore(run):
         run(_run(50, True))
 
 
+def test_semaphore_cancel_acquire(run):
+    async def _run():
+        sem = sync.Semaphore(2)
+        release_ev = Event()
+        got = []
+
+        async def holder():
+            async with sem:
+                await release_ev.waiter(None)
+
+        async def doomed():
+            async with sem:
+                got.append('doomed')
+
+        async with scope() as sc:
+            sc.spawn(holder())
+            sc.spawn(holder())
+            await time.sleep(0.1)
+            for _ in range(3):
+                async with scope() as inner:
+                    inner.spawn(doomed())
+                    await time.sleep(0.05)
+                    inner.cancel()
+
+            release_ev.set()
+            await time.sleep(0.1)
+
+            async def pair():
+                async with sem:
+                    async with sem:
+                        got.append('pair')
+
+            _, completed = await time.timeout(pair(), 2)
+            assert completed, 'semaphore bled permits to cancelled acquirers'
+
+        return got
+
+    assert run(_run()) == ['pair']
+
+
 def test_lock(run):
     stack = []
 
@@ -52,6 +92,42 @@ def test_lock(run):
         return out
 
     assert run(_run()) == list(range(50))
+
+
+def test_lock_cancel_acquire(run):
+    async def _run():
+        lock = sync.Lock()
+        release_ev = Event()
+        got = []
+
+        async def holder():
+            async with lock:
+                await release_ev.waiter(None)
+
+        async def doomed():
+            async with lock:
+                got.append('doomed')
+
+        async with scope() as sc:
+            sc.spawn(holder())
+            await time.sleep(0.1)
+            async with scope() as inner:
+                inner.spawn(doomed())
+                await time.sleep(0.1)
+                inner.cancel()
+
+            release_ev.set()
+
+            async def third():
+                async with lock:
+                    got.append('third')
+
+            _, completed = await time.timeout(third(), 2)
+            assert completed, 'lock wedged: handoff landed on a cancelled acquirer'
+
+        return got
+
+    assert run(_run()) == ['third']
 
 
 def test_barrier(run):

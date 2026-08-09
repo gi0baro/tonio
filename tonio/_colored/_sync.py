@@ -3,6 +3,7 @@ from types import TracebackType
 from .._sync import _LockImpl, _SemaphoreImpl
 from .._tonio import (
     Barrier as _Barrier,
+    CancelledError as _CancelledError,
     Channel as _Channel,
     ChannelReceiver as _ChannelReceiver,
     ChannelSender as _ChannelSender,
@@ -15,7 +16,12 @@ from .._tonio import (
 class Lock(_LockImpl):
     async def __aenter__(self):
         if event := self.acquire():
-            await event.waiter(None)
+            try:
+                await event.waiter(None)
+            except _CancelledError:
+                if not event.set():
+                    self.release()
+                raise
 
     async def __aexit__(
         self,
@@ -29,7 +35,12 @@ class Lock(_LockImpl):
 class Semaphore(_SemaphoreImpl):
     async def __aenter__(self):
         if event := self.acquire():
-            await event.waiter(None)
+            try:
+                await event.waiter(None)
+            except _CancelledError:
+                if not event.set():
+                    self.release()
+                raise
 
     async def __aexit__(
         self,

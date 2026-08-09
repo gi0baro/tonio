@@ -3,6 +3,7 @@ import pytest
 import tonio
 import tonio.sync
 import tonio.sync.channel as channel
+import tonio.time
 
 
 class AtomicError(RuntimeError): ...
@@ -35,6 +36,47 @@ def test_semaphore(run):
         run(_run(50, True))
 
 
+def test_semaphore_cancel_acquire(run):
+    def _run():
+        sem = tonio.sync.Semaphore(2)
+        release_ev = tonio.Event()
+        got = []
+
+        def holder():
+            with (yield sem()):
+                yield release_ev.waiter(None)
+
+        def doomed():
+            with (yield sem()):
+                got.append('doomed')
+
+        with tonio.scope() as sc:
+            sc.spawn(holder())
+            sc.spawn(holder())
+            yield tonio.sleep(0.1)
+            for _ in range(3):
+                with tonio.scope() as inner:
+                    inner.spawn(doomed())
+                    yield tonio.sleep(0.05)
+                    inner.cancel()
+                yield inner()
+
+            release_ev.set()
+            yield tonio.sleep(0.1)
+
+            def pair():
+                with (yield sem()):
+                    with (yield sem()):
+                        got.append('pair')
+
+            _, completed = yield tonio.time.timeout(pair(), 2)
+            assert completed, 'semaphore bled permits to cancelled acquirers'
+
+        return got
+
+    assert run(_run()) == ['pair']
+
+
 def test_lock(run):
     stack = []
 
@@ -53,6 +95,43 @@ def test_lock(run):
         return out
 
     assert run(_run()) == list(range(50))
+
+
+def test_lock_cancel_acquire(run):
+    def _run():
+        lock = tonio.sync.Lock()
+        release_ev = tonio.Event()
+        got = []
+
+        def holder():
+            with (yield lock()):
+                yield release_ev.waiter(None)
+
+        def doomed():
+            with (yield lock()):
+                got.append('doomed')
+
+        with tonio.scope() as sc:
+            sc.spawn(holder())
+            yield tonio.sleep(0.1)
+            with tonio.scope() as inner:
+                inner.spawn(doomed())
+                yield tonio.sleep(0.1)
+                inner.cancel()
+            yield inner()
+
+            release_ev.set()
+
+            def third():
+                with (yield lock()):
+                    got.append('third')
+
+            _, completed = yield tonio.time.timeout(third(), 2)
+            assert completed, 'lock wedged: handoff landed on a cancelled acquirer'
+
+        return got
+
+    assert run(_run()) == ['third']
 
 
 def test_barrier(run):

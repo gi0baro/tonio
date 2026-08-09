@@ -49,9 +49,10 @@ impl Lock {
 
     fn release(&self, py: Python) {
         let mut events = self.waiters.lock().unwrap();
-        if let Some(event) = events.pop_front() {
-            event.get().set(py);
-            return;
+        while let Some(event) = events.pop_front() {
+            if event.get().set(py) {
+                return;
+            }
         }
         self.state.store(false, atomic::Ordering::Release);
     }
@@ -98,9 +99,10 @@ impl Semaphore {
 
     fn release(&self, py: Python) {
         let mut state = self.state.lock().unwrap();
-        if let Some(event) = state.1.pop_front() {
-            event.get().set(py);
-            return;
+        while let Some(event) = state.1.pop_front() {
+            if event.get().set(py) {
+                return;
+            }
         }
         state.0 += 1;
     }

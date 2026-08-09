@@ -3,6 +3,7 @@ from typing import Any
 
 from ._tonio import (
     Barrier as _Barrier,
+    CancelledError as _CancelledError,
     Channel as _Channel,
     ChannelReceiver as _ChannelReceiver,
     ChannelSender as _ChannelSender,
@@ -26,7 +27,12 @@ class _LockImpl(_Lock):
 class Lock(_LockImpl):
     def __call__(self) -> Coro[contextlib.AbstractContextManager[None]]:
         if event := self.acquire():
-            yield event.waiter(None)
+            try:
+                yield event.waiter(None)
+            except _CancelledError:
+                if not event.set():
+                    self.release()
+                raise
         return _LockCtx(self)
 
 
@@ -39,7 +45,12 @@ class _SemaphoreImpl(_Semaphore):
 class Semaphore(_SemaphoreImpl):
     def __call__(self) -> Coro[contextlib.AbstractContextManager[None]]:
         if event := self.acquire():
-            yield event.waiter(None)
+            try:
+                yield event.waiter(None)
+            except _CancelledError:
+                if not event.set():
+                    self.release()
+                raise
         return _SemaphoreCtx(self)
 
 
