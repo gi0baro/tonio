@@ -21,7 +21,7 @@ class SocketStream(_Stream):
         self.socket = socket
 
         with suppress(OSError):
-            self.setsockopt(_stdlib_socket.IPPROTO_TCP, _stdlib_socket.TCP_NODELAY, True)
+            self.socket.setsockopt(_stdlib_socket.IPPROTO_TCP, _stdlib_socket.TCP_NODELAY, True)
 
         if hasattr(_stdlib_socket, 'TCP_NOTSENT_LOWAT'):
             with suppress(OSError):
