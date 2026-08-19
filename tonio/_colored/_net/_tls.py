@@ -56,13 +56,13 @@ class TLSStream(_Stream, _TLSStream):
             if recv_count == self._recv_count:
                 data = await self.transport.receive_some()
                 if not data:
-                    self._ssl.ingress_write_eof()
+                    self._ssl._ingress_write_eof()
                 else:
                     self._recv_est_size = max(
                         self._recv_est_size,
                         len(data),
                     )
-                    self._ssl.ingress_write(data)
+                    self._ssl._ingress_write(data)
                 self._recv_count += 1
 
     async def _send(self, data) -> None:
@@ -98,7 +98,7 @@ class TLSStream(_Stream, _TLSStream):
         done = False
         while not done:
             try:
-                _, want_read, to_send = self._ssl.do_handshake()
+                _, want_read, to_send = self._ssl._do_handshake()
             except (_stdlib_ssl.SSLError, _stdlib_ssl.CertificateError) as exc:
                 self._set_broken()
                 raise ResourceBroken from exc
@@ -119,14 +119,14 @@ class TLSStream(_Stream, _TLSStream):
         self._check_ready()
         if not data:
             return
-        await self._ssl_dance(self._ssl.write, data)
+        await self._ssl_dance(self._ssl._write, data)
 
     async def receive_some(self, max_bytes: int | None = None) -> bytes | bytearray:
         self._check_ready()
         if max_bytes is None:
-            max_bytes = max(self._recv_est_size, self._ssl.ingress_pending)
+            max_bytes = max(self._recv_est_size, self._ssl._ingress_pending)
         try:
-            ret = await self._ssl_dance(self._ssl.read, max_bytes)
+            ret = await self._ssl_dance(self._ssl._read, max_bytes)
             return ret
         except ResourceBroken as exc:
             if self._compat_https and _is_eof(exc.__cause__):
@@ -145,7 +145,7 @@ class TLSStream(_Stream, _TLSStream):
         try:
             with contextlib.suppress(ResourceBroken):
                 try:
-                    _, _, to_send = self._ssl.unwrap()
+                    _, _, to_send = self._ssl._unwrap()
                 except (_stdlib_ssl.SSLError, _stdlib_ssl.CertificateError) as exc:
                     self._set_broken()
                     raise ResourceBroken from exc
