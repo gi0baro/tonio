@@ -1,4 +1,4 @@
-use pyo3::{IntoPyObjectExt, prelude::*, types::PyList};
+use pyo3::{IntoPyObjectExt, PyTraverseError, PyVisit, prelude::*, types::PyList};
 use std::{
     collections::VecDeque,
     sync::{Arc, Mutex, atomic},
@@ -402,6 +402,23 @@ impl ResultHolder {
         match self.size {
             1 => guard.first().unwrap().clone_ref(py),
             _ => PyList::new(py, &guard[..]).unwrap().into_py_any(py).unwrap(),
+        }
+    }
+
+    fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
+        if let Ok(guard) = self.data.try_lock() {
+            for obj in guard.iter() {
+                visit.call(obj)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn __clear__(&self, py: Python) {
+        if let Ok(mut guard) = self.data.try_lock() {
+            for obj in guard.iter_mut() {
+                *obj = py.None();
+            }
         }
     }
 
