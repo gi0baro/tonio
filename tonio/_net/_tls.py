@@ -8,6 +8,7 @@ Heavily inspired by `trio` code.
 
 import contextlib
 import ssl as _stdlib_ssl
+import threading
 from typing import Any
 
 from .._sync import Lock
@@ -20,12 +21,76 @@ def _is_eof(exc: BaseException | None) -> bool:
     return isinstance(exc, _stdlib_ssl.SSLEOFError) or ('UNEXPECTED_EOF_WHILE_READING' in getattr(exc, 'strerror', ()))
 
 
+class _SSLProxy:
+    __slots__ = [
+        '_ingress',
+        '_egress',
+        '_inner',
+        '_lock',
+    ]
+
+    def __init__(
+        self,
+        ssl_context: _stdlib_ssl.SSLContext,
+        server_side: bool,
+        server_hostname: str | bytes | None,
+    ):
+        self._lock = threading.Lock()
+        self._ingress = _stdlib_ssl.MemoryBIO()
+        self._egress = _stdlib_ssl.MemoryBIO()
+        self._inner = ssl_context.wrap_bio(
+            self._ingress,
+            self._egress,
+            server_side=server_side,
+            server_hostname=server_hostname,
+        )
+
+    @property
+    def server_side(self) -> bool:
+        return self._inner.server_side
+
+    def version(self) -> str | None:
+        return self._inner.version()
+
+    @property
+    def ingress_pending(self) -> int:
+        with self._lock:
+            return self._ingress.pending
+
+    def ingress_write(self, data) -> None:
+        with self._lock:
+            self._ingress.write(data)
+
+    def ingress_write_eof(self) -> None:
+        with self._lock:
+            self._ingress.write_eof()
+
+    def read(self, max_bytes: int) -> tuple[Any, bool, bytes]:
+        return self._step(self._inner.read, max_bytes)
+
+    def write(self, data) -> tuple[Any, bool, bytes]:
+        return self._step(self._inner.write, data)
+
+    def do_handshake(self) -> tuple[Any, bool, bytes]:
+        return self._step(self._inner.do_handshake)
+
+    def unwrap(self) -> tuple[Any, bool, bytes]:
+        return self._step(self._inner.unwrap)
+
+    def _step(self, fn, *args) -> tuple[Any, bool, bytes]:
+        with self._lock:
+            ret, want_read = None, False
+            try:
+                ret = fn(*args)
+            except _stdlib_ssl.SSLWantReadError:
+                want_read = True
+            return ret, want_read, self._egress.read()
+
+
 class TLSStream(_Stream, _TLSStream):
     __slots__ = [
         'transport',
         '_ssl',
-        '_egress',
-        '_ingress',
         '_lock_recv',
         '_lock_send',
         '_egress_stack',
@@ -45,16 +110,13 @@ class TLSStream(_Stream, _TLSStream):
     ):
         self.transport = transport
         self._compat_https = https_compatible
-        self._egress = _stdlib_ssl.MemoryBIO()
-        self._ingress = _stdlib_ssl.MemoryBIO()
         self._lock_recv = Lock()
         self._lock_send = Lock()
         self._egress_stack = bytearray()
         self._recv_count = 0
         self._recv_est_size = 16384
-        self._ssl = ssl_context.wrap_bio(
-            self._ingress,
-            self._egress,
+        self._ssl = _SSLProxy(
+            ssl_context,
             server_side=server_side,
             server_hostname=server_hostname,
         )
@@ -65,13 +127,13 @@ class TLSStream(_Stream, _TLSStream):
             if recv_count == self._recv_count:
                 data = yield self.transport.receive_some()
                 if not data:
-                    self._ingress.write_eof()
+                    self._ssl.ingress_write_eof()
                 else:
                     self._recv_est_size = max(
                         self._recv_est_size,
                         len(data),
                     )
-                    self._ingress.write(data)
+                    self._ssl.ingress_write(data)
                 self._recv_count += 1
 
     def _send(self, data) -> Coro[None]:
@@ -86,43 +148,33 @@ class TLSStream(_Stream, _TLSStream):
                 raise
 
     def _ssl_dance(self, ssl_fn, *args) -> Coro[Any]:
-        done = False
-        while not done:
-            want_read = False
+        while True:
             try:
-                ret = ssl_fn(*args)
-            except _stdlib_ssl.SSLWantReadError:
-                want_read = True
+                ret, want_read, to_send = ssl_fn(*args)
             except (_stdlib_ssl.SSLError, _stdlib_ssl.CertificateError) as exc:
                 self._set_broken()
                 raise ResourceBroken from exc
-            else:
-                done = True
 
-            if to_send := self._egress.read():
+            if to_send:
                 yield self._send(to_send)
             elif want_read:
                 yield self._recv()
 
-        return ret
+            if not want_read:
+                return ret
 
     def handshake(self) -> Coro[None]:
         self._handshake_pre()
 
         done = False
         while not done:
-            want_read = False
             try:
-                self._ssl.do_handshake()
-            except _stdlib_ssl.SSLWantReadError:
-                want_read = True
+                _, want_read, to_send = self._ssl.do_handshake()
             except (_stdlib_ssl.SSLError, _stdlib_ssl.CertificateError) as exc:
                 self._set_broken()
                 raise ResourceBroken from exc
-            else:
-                done = True
+            done = not want_read
 
-            to_send = self._egress.read()
             if not want_read and self._ssl.server_side and self._ssl.version() == 'TLSv1.3':
                 self._egress_stack.extend(to_send)
                 to_send = b''
@@ -143,7 +195,7 @@ class TLSStream(_Stream, _TLSStream):
     def receive_some(self, max_bytes: int | None = None) -> Coro[bytes | bytearray]:
         self._check_ready()
         if max_bytes is None:
-            max_bytes = max(self._recv_est_size, self._ingress.pending)
+            max_bytes = max(self._recv_est_size, self._ssl.ingress_pending)
         try:
             ret = yield self._ssl_dance(self._ssl.read, max_bytes)
             return ret
@@ -163,20 +215,14 @@ class TLSStream(_Stream, _TLSStream):
 
         try:
             with contextlib.suppress(ResourceBroken):
-                done = False
-                while not done:
-                    try:
-                        self._ssl.unwrap()
-                    except _stdlib_ssl.SSLWantReadError:
-                        done = True
-                    except (_stdlib_ssl.SSLError, _stdlib_ssl.CertificateError) as exc:
-                        self._set_broken()
-                        raise ResourceBroken from exc
-                    else:
-                        done = True
+                try:
+                    _, _, to_send = self._ssl.unwrap()
+                except (_stdlib_ssl.SSLError, _stdlib_ssl.CertificateError) as exc:
+                    self._set_broken()
+                    raise ResourceBroken from exc
 
-                    if to_send := self._egress.read():
-                        yield self._send(to_send)
+                if to_send:
+                    yield self._send(to_send)
         finally:
             self.transport.close()
 
