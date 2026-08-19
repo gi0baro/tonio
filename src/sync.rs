@@ -29,6 +29,13 @@ impl Lock {
             .is_err()
         {
             let mut events = self.waiters.lock().unwrap();
+            if self
+                .state
+                .compare_exchange(false, true, atomic::Ordering::Acquire, atomic::Ordering::Relaxed)
+                .is_ok()
+            {
+                return None;
+            }
             let event = Py::new(py, Event::new()).unwrap();
             events.push_back(event.clone_ref(py));
             return Some(event);
