@@ -52,6 +52,10 @@ class _SSLProxy:
     def version(self) -> str | None:
         return self._inner.version()
 
+    def selected_alpn_protocol(self) -> str | None:
+        with self._lock:
+            return self._inner.selected_alpn_protocol()
+
     @property
     def ingress_pending(self) -> int:
         with self._lock:
