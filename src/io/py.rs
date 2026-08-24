@@ -31,6 +31,14 @@ impl PyScheduledIO {
         self.io.arm_w(py, timeout)
     }
 
+    fn clear_r(&self) {
+        self.io.clear_r();
+    }
+
+    fn clear_w(&self) {
+        self.io.clear_w();
+    }
+
     fn consume_r(&self) -> bool {
         self.io.consume_r()
     }
