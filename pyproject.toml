@@ -37,7 +37,7 @@ lint = [
     'ruff~=0.15.20',
 ]
 test = [
-    'pytest~=8.3',
+    'pytest~=9.0',
     'trustme~=1.2',
 ]
 
@@ -54,6 +54,9 @@ Source = 'https://github.com/gi0baro/tonio'
 
 [project.entry-points]
 pytest11 = {tonio = "tonio._testutils._pytest_plugin"}
+
+[tool.pytest.ini_options]
+addopts = '-p pytester'
 
 [build-system]
 requires = ['maturin>=1.8.0,<2']

@@ -1380,6 +1380,111 @@ async def main():
 ```
 </td></tr></table>
 
+### Testing
+
+TonIO ships with a pytest plugin, which runs tests marked with the `tonio` marker on the runtime:
+
+<table><tr><td>
+
+`yield` syntax
+
+```python
+import pytest
+import tonio
+
+@pytest.mark.tonio
+def test_sleep():
+    yield tonio.sleep(0.1)
+```
+</td><td>
+
+`await` syntax
+
+```python
+import pytest
+import tonio.colored as tonio
+
+@pytest.mark.tonio
+async def test_sleep():
+    await tonio.sleep(0.1)
+```
+</td></tr></table>
+
+The marker can also be applied at module level with `pytestmark = pytest.mark.tonio`, or at class level.
+
+To avoid marking tests entirely, the plugin also provides an *auto* mode, in which every async test gets run on the TonIO runtime. Auto mode can be enabled with the `tonio_mode` option in the pytest configuration:
+
+```toml
+[tool.pytest.ini_options]
+tonio_mode = 'auto'
+```
+
+#### Async fixtures
+
+For asynchronous fixtures where setup and teardown are required, the two syntaxes differ.
+
+##### `await` syntax
+
+Async fixtures involved in TonIO tests run on the runtime. Coroutine fixtures simply return their value, while async generator fixtures can `yield` it and run teardown code after the `yield`:
+
+```python
+import pytest
+from tonio.colored.net import open_tcp_stream
+
+@pytest.fixture
+async def connection():
+    stream = await open_tcp_stream(host='127.0.0.1', port=8000)
+    yield stream
+    stream.close()
+```
+
+##### `yield` syntax
+
+Given non-colored TonIO coroutines are indistinguishable from standard pytest generator fixtures, the plugin never runs generator fixtures on the runtime. This is usually not a limitation: since `yield` syntax tests already run as coroutines, simple setup can just happen within the test itself:
+
+```python
+import pytest
+from tonio.net import open_tcp_stream
+
+def _connect():
+    stream = yield open_tcp_stream(host='127.0.0.1', port=8000)
+    return stream
+
+@pytest.mark.tonio
+def test_conn():
+    stream = yield _connect()
+    yield stream.send_all(b'ping')
+```
+
+When an actual teardown is required, the plugin provides the `tonio_run` fixture, which runs the given coroutine on the runtime:
+
+```python
+@pytest.fixture
+def connection(tonio_run):
+    stream = tonio_run(_connect())
+
+    def _disconnect():
+        yield stream.send_all(b'bye')
+        stream.close()
+
+    yield stream
+    tonio_run(_disconnect())
+```
+
+#### Runtime configuration in pytest
+
+The TonIO runtime is always initialised once per test session, with `context` enabled and 2 threads. Runtime options can be customized overriding the session-scoped `tonio_runtime_options` fixture, for example in `conftest.py`:
+
+```python
+import pytest
+
+@pytest.fixture(scope='session')
+def tonio_runtime_options():
+    return {'threads': 4}
+```
+
+The runtime object itself is available to tests and fixtures via the session-scoped `tonio_runtime` fixture.
+
 ## Libraries built on TonIO
 
 In addition to the patches provided by the [TonIO-Monkey](https://github.com/gi0baro/tonio-monkey) project,
