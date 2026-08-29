@@ -18,6 +18,7 @@ from .._fd import ProcFd, open_proc_fd
 from .._streams import _Stream
 from .._subprocess import HasFileno, Process as _Process, StrOrBytesPath
 from ..exceptions import ResourceBroken
+from . import yield_now
 from ._ctl import spawn, spawn_blocking
 from ._fd import FdStream
 from ._sync import Lock
@@ -53,8 +54,15 @@ class Process(_Process):
     async def wait(self) -> int:
         async with self._wait_lock:
             if self.poll() is None:
-                if (waiter := self._pidfd._io_arm_r()) is not None:
-                    await waiter
+                if (pidfd := self._pidfd) is not None:
+                    if (waiter := pidfd._io_arm_r()) is not None:
+                        await waiter
+                else:
+                    #: pidfd should never be None. but, apparently, on kqueue
+                    #  there's a race condition where it says the process
+                    #  doesn't exist before `waitpid` says it hasn't exited yet.
+                    #  we do a runtime suspension to "mitigate" the next blocking wait.
+                    await yield_now()
                 self._proc.wait()
                 self._close_pidfd()
 

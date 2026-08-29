@@ -91,8 +91,15 @@ class Process:
     def wait(self) -> Coro[int]:
         with (yield self._wait_lock()):
             if self.poll() is None:
-                if (waiter := self._pidfd._io_arm_r()) is not None:
-                    yield waiter
+                if (pidfd := self._pidfd) is not None:
+                    if (waiter := pidfd._io_arm_r()) is not None:
+                        yield waiter
+                else:
+                    #: pidfd should never be None. but, apparently, on kqueue
+                    #  there's a race condition where it says the process
+                    #  doesn't exist before `waitpid` says it hasn't exited yet.
+                    #  we do a runtime suspension to "mitigate" the next blocking wait.
+                    yield
                 self._proc.wait()
                 self._close_pidfd()
 
