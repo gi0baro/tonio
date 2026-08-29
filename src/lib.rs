@@ -20,6 +20,8 @@ mod proc;
 mod py;
 mod runtime;
 mod scope;
+#[cfg(unix)]
+mod sig;
 mod sync;
 mod time;
 mod work;

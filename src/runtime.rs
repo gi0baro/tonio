@@ -13,6 +13,8 @@ use crossbeam_utils::sync::Parker;
 use mio::{Interest, Poll, Token, Waker, event};
 use pyo3::prelude::*;
 
+#[cfg(unix)]
+use crate::sig::SigMaskGuard;
 use crate::{
     blocking::BlockingRunnerPool,
     handles::BoxedHandle,
@@ -552,6 +554,9 @@ impl Runtime {
             thread::spawn(move || work_loop(schedule, runtime, idx, worker, parker, cvar));
         }
 
+        #[cfg(unix)]
+        let _sigmask = SigMaskGuard::block_sigchld();
+
         loop {
             if rself.stopping.load(atomic::Ordering::Acquire) {
                 break;
@@ -561,7 +566,12 @@ impl Runtime {
                     if rself.sig_loop_handled.swap(false, atomic::Ordering::Relaxed) {
                         continue;
                     }
-                    break;
+                    let pyerr = match py.check_signals() {
+                        Err(pyerr) => pyerr,
+                        _ => pyo3::exceptions::PyRuntimeError::new_err("Unhandled EINTR in poll loop"),
+                    };
+                    rself.teardown(py, &mut state, threads_cb_cvar);
+                    return Err(pyerr);
                 }
                 rself.teardown(py, &mut state, threads_cb_cvar);
                 return Err(err.into());
