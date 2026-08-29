@@ -101,10 +101,8 @@ impl ProcFd {
         self.inner.lock().unwrap().as_ref().map_or(-1, AsRawFd::as_raw_fd)
     }
 
-    fn _drop(&self) {
-        if let Some(inner) = self.inner.lock().unwrap().take() {
-            _ = inner.into_raw_fd();
-        }
+    fn _drop(&self) -> i32 {
+        self.inner.lock().unwrap().take().map_or(-1, IntoRawFd::into_raw_fd)
     }
 
     #[pyo3(signature = (timeout=None))]

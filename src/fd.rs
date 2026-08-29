@@ -38,11 +38,13 @@ impl Fd {
         self.inner.lock().unwrap().as_ref().map_or(-1, AsRawFd::as_raw_fd)
     }
 
-    fn _drop(&self, py: Python) {
+    fn _drop(&self, py: Python) -> i32 {
         if let Some(inner) = self.inner.lock().unwrap().take() {
             let fd = inner.into_raw_fd();
             _ = crate::py::os_set_blocking(py, fd, self.blocking);
+            return fd;
         }
+        -1
     }
 
     #[pyo3(signature = (timeout=None))]

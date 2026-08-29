@@ -7,7 +7,7 @@ from ._types import Coro
 from .exceptions import ResourceBroken
 
 
-class Fd(_Fd):
+class _FdImpl:
     @property
     def closed(self) -> bool:
         return self.fd == -1
@@ -15,30 +15,21 @@ class Fd(_Fd):
     def close(self) -> None:
         if self.closed:
             return
-        fd = self.fd
         self._io_close()
-        self._drop()
-        os.close(fd)
+        fd = self._drop()
+        if fd != -1:
+            os.close(fd)
 
     def __del__(self) -> None:
         self.close()
 
 
-class ProcFd(_ProcFd):
-    @property
-    def closed(self) -> bool:
-        return self.fd == -1
+class Fd(_FdImpl, _Fd):
+    __slots__ = []
 
-    def close(self) -> None:
-        if self.closed:
-            return
-        fd = self.fd
-        self._io_close()
-        self._drop()
-        os.close(fd)
 
-    def __del__(self) -> None:
-        self.close()
+class ProcFd(_FdImpl, _ProcFd):
+    __slots__ = []
 
 
 class FdStream(_Stream):

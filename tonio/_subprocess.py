@@ -84,8 +84,8 @@ class Process:
         return result
 
     def _close_pidfd(self) -> None:
-        if self._pidfd is not None:
-            self._pidfd.close()
+        if (pidfd := self._pidfd) is not None:
+            pidfd.close()
             self._pidfd = None
 
     def wait(self) -> Coro[int]:
