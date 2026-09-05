@@ -223,7 +223,12 @@ impl Waiter {
                 None => PyGenSuspension::from_gen(target, None, sentinel, None).into(),
             };
             if let Some(checkpoint) = &suspension.checkpoint {
-                checkpoint.get().checkpoint_gen.swap(Some(suspension.clone()));
+                let rcheckpoint = checkpoint.get();
+                rcheckpoint.checkpoint_gen.swap(Some(suspension.clone()));
+                if rcheckpoint.aborted.load(atomic::Ordering::Acquire) {
+                    suspension.error(py, runtime.get(), abort());
+                    return;
+                }
             }
             // println!("WAITER REGISTERED {:?}", suspension.target);
             rself.register(py, runtime, Suspension::Gen(suspension));
@@ -271,6 +276,10 @@ impl Waiter {
                         Some(checkpoint.clone()),
                     ));
                     rcheckpoint.checkpoint_asyncgen.swap(Some(suspension.clone()));
+                    if rcheckpoint.aborted.load(atomic::Ordering::Acquire) {
+                        suspension.error(py, runtime.get(), abort());
+                        return;
+                    }
                     suspension
                 }
                 _ => PyAsyncGenSuspension::from_gen(target, sentinel, Arc::new(false.into()), None).into(),

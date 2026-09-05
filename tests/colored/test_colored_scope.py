@@ -45,3 +45,29 @@ def test_scope_cancel_immediate(run):
 
     assert set(enter) == {1}
     assert not exit
+
+
+def test_scope_checkpoint_finalize_children(run):
+    checkpoint = tonio.Waiter.checkpoint()
+    done = tonio.Event()
+    seen = []
+
+    async def _probe():
+        try:
+            await checkpoint
+            checkpoint.abort()
+            await tonio.sleep(0.001)
+            seen.append('resumed')
+        except tonio.exceptions.CancelledError:
+            seen.append('cancelled')
+        finally:
+            seen.append('finally')
+            done.set()
+
+    async def _run():
+        tonio.spawn.without_tracking(_probe())
+        await done.wait(1)
+
+    run(_run())
+
+    assert seen == ['cancelled', 'finally']
