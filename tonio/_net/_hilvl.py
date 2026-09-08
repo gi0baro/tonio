@@ -11,10 +11,11 @@ import os
 import socket as _stdlib_socket
 import ssl as _stdlib_ssl
 import sys
+import threading
 from contextlib import contextmanager, suppress
 from typing import Any, Generator
 
-from .._ctl import spawn, spawn_blocking
+from .._ctl import select, spawn, spawn_blocking
 from .._events import Event
 from .._scope import scope
 from .._time import sleep
@@ -106,6 +107,8 @@ def open_tcp_stream(
     # reorder_targets(targets)
     errs: list[OSError] = []
     winning_socket: _Socket | None = None
+    win_lock = threading.Lock()
+    won = Event()
 
     def attempt_connect(
         socket_args: tuple[int, int, int],
@@ -132,8 +135,11 @@ def open_tcp_stream(
                     ) from None
 
             yield sock.connect(sockaddr)
-            winning_socket = sock
+            with win_lock:
+                if winning_socket is None:
+                    winning_socket = sock
             _scope.cancel()
+            won.set()
         except OSError as exc:
             errs.append(exc)
             failed.set()
@@ -149,7 +155,9 @@ def open_tcp_stream(
                         failed,
                     )
                 )
-                yield failed.wait(happy_eyeballs_delay)
+                yield select(failed.wait(happy_eyeballs_delay), won.wait())
+                if won.is_set():
+                    break
 
         yield _scope()
 
