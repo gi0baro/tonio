@@ -486,7 +486,7 @@ impl Suspension {
         }
     }
 
-    fn is_dead(&self) -> bool {
+    pub(crate) fn is_dead(&self) -> bool {
         match self {
             Self::Gen(inner) => inner.consumed.load(atomic::Ordering::Acquire),
             Self::AsyncGen(inner) => {

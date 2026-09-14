@@ -141,7 +141,11 @@ impl Runtime {
                         if timer.when > tick {
                             break;
                         }
-                        self.defer_handle(Box::new(guard_sched.pop().unwrap()));
+                        let handle = guard_sched.pop().unwrap();
+                        if handle.target.is_dead() {
+                            continue;
+                        }
+                        self.defer_handle(Box::new(handle));
                     }
                 }
             }
@@ -326,11 +330,14 @@ impl Runtime {
     }
 
     pub fn add_timer(&self, timer: Timer) {
-        {
+        if {
             let mut guard = self.handles_sched.lock().unwrap();
+            let earlier_head = guard.peek().is_some_and(|head| head.when <= timer.when);
             guard.push(timer);
+            !earlier_head
+        } {
+            self.wake();
         }
-        self.wake();
     }
 }
 
