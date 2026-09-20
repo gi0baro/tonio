@@ -3,7 +3,7 @@ use std::sync::Arc;
 use mio::Interest;
 use pyo3::prelude::*;
 
-use super::schedule::ScheduledIO;
+use super::{RawFd, schedule::ScheduledIO};
 use crate::events::Waiter;
 
 //: raw-fd registration handle for consumers that perform their own I/O
@@ -15,7 +15,7 @@ struct PyScheduledIO {
 #[pymethods]
 impl PyScheduledIO {
     #[new]
-    fn new(py: Python, fd: i32) -> PyResult<Self> {
+    fn new(py: Python, fd: RawFd) -> PyResult<Self> {
         let runtime = crate::get_runtime(py)?;
         let io = runtime.get().io_register(fd, Interest::READABLE | Interest::WRITABLE)?;
         Ok(Self { io })

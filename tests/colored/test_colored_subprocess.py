@@ -9,6 +9,10 @@ import tonio.colored as tonio
 from tonio._colored._subprocess import Process
 
 
+skip_win = pytest.mark.skipif(sys.platform == 'win32', reason='no pidfd support')
+_KILLED = 1 if sys.platform == 'win32' else -signal.SIGKILL
+
+
 def test_run_process(run):
     async def _run():
         return await tonio.run_process(
@@ -48,7 +52,6 @@ def test_open_process_wait(run):
     proc, ret = run(_run())
     assert ret == 0
     assert proc.returncode == 0
-    assert proc._pidfd is None
 
 
 def test_kill(run):
@@ -57,7 +60,7 @@ def test_kill(run):
         proc.kill()
         return await proc.wait()
 
-    assert run(_run()) == -signal.SIGKILL
+    assert run(_run()) == _KILLED
 
 
 def test_already_exited(run):
@@ -66,9 +69,27 @@ def test_already_exited(run):
         time.sleep(0.01)
 
     proc = Process(popen, None, None, None)
-    assert proc._pidfd is None
 
     async def _run():
         return await proc.wait()
 
     assert run(_run()) == 0
+
+
+@skip_win
+def test_pidfd_released(run):
+    async def _run():
+        proc = await tonio.open_process([sys.executable, '-c', 'import time; time.sleep(0.2)'])
+        await proc.wait()
+        return proc
+
+    assert run(_run())._pidfd is None
+
+
+@skip_win
+def test_pidfd_already_exited():
+    popen = subprocess.Popen([sys.executable, '-c', ''])
+    while popen.poll() is None:
+        time.sleep(0.01)
+
+    assert Process(popen, None, None, None)._pidfd is None

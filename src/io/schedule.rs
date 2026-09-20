@@ -2,7 +2,10 @@ use std::sync::{Mutex, atomic};
 
 use pyo3::prelude::*;
 
-use crate::events::{Event, Waiter};
+use crate::{
+    events::{Event, Waiter},
+    io::RawFd,
+};
 
 //: readiness word layout: | tick: 8 bits | shutdown: 1 bit | readiness: 5 bits |
 const READABLE: usize = 0b00_0001;
@@ -35,7 +38,8 @@ struct Waiters {
 //  Cache-padded to avoid false sharing between entries.
 #[repr(align(128))]
 pub(crate) struct ScheduledIO {
-    pub(crate) fd: i32,
+    #[cfg_attr(windows, allow(dead_code))]
+    pub(crate) fd: RawFd,
     readiness: atomic::AtomicUsize,
     tick_r: atomic::AtomicU8,
     tick_w: atomic::AtomicU8,
@@ -43,7 +47,7 @@ pub(crate) struct ScheduledIO {
 }
 
 impl ScheduledIO {
-    pub(crate) fn new(fd: i32) -> Self {
+    pub(crate) fn new(fd: RawFd) -> Self {
         Self {
             fd,
             readiness: atomic::AtomicUsize::new(0),
@@ -79,6 +83,13 @@ impl ScheduledIO {
             };
             *slot = Some(event.clone_ref(py));
         }
+
+        //: on Windows the polling is one-shot, thus we need to re-register
+        #[cfg(windows)]
+        crate::get_runtime(py)?
+            .get()
+            .io_rearm(std::ptr::from_ref(self).expose_provenance());
+
         Ok(Some(event))
     }
 
@@ -140,6 +151,17 @@ impl ScheduledIO {
     pub(crate) fn shutdown(&self) -> (Option<Py<Event>>, Option<Py<Event>>) {
         self.readiness.fetch_or(SHUTDOWN, atomic::Ordering::AcqRel);
         self.wake(READ_ALL | WRITE_ALL)
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn wanted_interest(&self) -> Option<mio::Interest> {
+        let slots = self.waiters.lock().unwrap();
+        match (slots.reader.is_some(), slots.writer.is_some()) {
+            (true, true) => Some(mio::Interest::READABLE | mio::Interest::WRITABLE),
+            (true, false) => Some(mio::Interest::READABLE),
+            (false, true) => Some(mio::Interest::WRITABLE),
+            (false, false) => None,
+        }
     }
 
     // downstream API
