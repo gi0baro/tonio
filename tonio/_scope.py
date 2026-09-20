@@ -22,12 +22,12 @@ class Scope(_Scope):
             get_runtime()._spawn_pygen(wrapped_coro)
 
     def __enter__(self):
-        if not self._incr(0):
+        if not self._incr(0, False):
             raise RuntimeError('Cannot enter the same scope multiple times.')
         return self
 
     def __exit__(self, exc_type, exc_value, exc_tb):
-        self._incr(1)
+        self._incr(1, exc_type is not None)
         return
 
     def __call__(self):
@@ -35,5 +35,5 @@ class Scope(_Scope):
         yield waiter
 
 
-def scope():
-    return Scope()
+def scope(cancel_on_exc: bool = False):
+    return Scope(cancel_on_exc)

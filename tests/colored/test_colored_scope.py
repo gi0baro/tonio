@@ -1,3 +1,5 @@
+import contextlib
+
 import tonio.colored as tonio
 
 
@@ -16,6 +18,31 @@ def test_scope_cancel(run):
             scope.spawn(_sleep(2, 2))
             await tonio.sleep(0.2)
             scope.cancel()
+        await tonio.sleep(2)
+
+    run(_run())
+
+    assert set(enter) == {1, 2}
+    assert set(exit) == {1}
+
+
+def test_scope_cancel_on_exc(run):
+    enter = []
+    exit = []
+
+    async def _sleep(idx, t):
+        enter.append(idx)
+        await tonio.sleep(t)
+        exit.append(idx)
+
+    async def _run():
+        with contextlib.suppress(RuntimeError):
+            async with tonio.scope(cancel_on_exc=True) as scope:
+                scope.spawn(_sleep(1, 0.1))
+                scope.spawn(_sleep(2, 2))
+                await tonio.sleep(0.2)
+                raise RuntimeError
+
         await tonio.sleep(2)
 
     run(_run())

@@ -433,7 +433,7 @@ async def main():
 ```
 </td></tr></table>
 
-When you `yield` on the scope, it will wait for all the spawned coroutines to end. If the scope was canceled, then all the pending coroutines will be canceled.
+When you `yield` on the scope, it will wait for all the spawned coroutines to end. If the scope was canceled, then all the pending coroutines will be canceled. By default, an exception in the scope context won't cancel the scope itself. If you want those exceptions to cancel the scope, you can pass `cancel_on_exc=True` to `scope`.
 
 > **Note:** as you can see, the *colored* version of `scope` doesn't require to be `await`ed, as it will *yield* when exiting the context.
 

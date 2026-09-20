@@ -9,24 +9,35 @@ struct PyGenScope {
     waiter: Mutex<Option<Py<Waiter>>>,
     consumed: atomic::AtomicU8,
     cancelled: atomic::AtomicBool,
+    cancel_on_exc: bool,
 }
 
 #[pymethods]
 impl PyGenScope {
     #[new]
-    fn new() -> Self {
+    #[pyo3(signature = (cancel_on_exc = false))]
+    fn new(cancel_on_exc: bool) -> Self {
         Self {
             stack: Mutex::new(Vec::new()),
             waiter: Mutex::new(None),
             consumed: 0.into(),
             cancelled: false.into(),
+            cancel_on_exc,
         }
     }
 
-    fn _incr(&self, from: u8) -> bool {
-        self.consumed
+    fn _incr(&self, from: u8, exc: bool) -> bool {
+        if self
+            .consumed
             .compare_exchange(from, from + 1, atomic::Ordering::Relaxed, atomic::Ordering::Relaxed)
             .is_ok()
+        {
+            if exc && self.cancel_on_exc {
+                self.cancel();
+            }
+            return true;
+        }
+        false
     }
 
     fn _track(&self, pygen: Bound<PyAny>) -> PyResult<Py<PyAny>> {
@@ -79,24 +90,35 @@ struct PyAsyncGenScope {
     waiter: Mutex<Option<Py<Waiter>>>,
     consumed: atomic::AtomicU8,
     cancelled: atomic::AtomicBool,
+    cancel_on_exc: bool,
 }
 
 #[pymethods]
 impl PyAsyncGenScope {
     #[new]
-    fn new() -> Self {
+    #[pyo3(signature = (cancel_on_exc = false))]
+    fn new(cancel_on_exc: bool) -> Self {
         Self {
             stack: Mutex::new(Vec::new()),
             waiter: Mutex::new(None),
             consumed: 0.into(),
             cancelled: false.into(),
+            cancel_on_exc,
         }
     }
 
-    fn _incr(&self, from: u8) -> bool {
-        self.consumed
+    fn _incr(&self, from: u8, exc: bool) -> bool {
+        if self
+            .consumed
             .compare_exchange(from, from + 1, atomic::Ordering::Relaxed, atomic::Ordering::Relaxed)
             .is_ok()
+        {
+            if exc && self.cancel_on_exc {
+                self.cancel();
+            }
+            return true;
+        }
+        false
     }
 
     fn _track(&self, pygen: Bound<PyAny>) -> PyResult<Py<PyAny>> {

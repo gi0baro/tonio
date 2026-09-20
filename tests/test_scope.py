@@ -1,3 +1,5 @@
+import contextlib
+
 import tonio
 
 
@@ -18,6 +20,32 @@ def test_scope_cancel(run):
             scope.cancel()
         # `spawn` calls after exit are noop
         scope.spawn(_sleep(3, 0.1))
+
+        yield scope()
+        yield tonio.sleep(2)
+
+    run(_run())
+
+    assert set(enter) == {1, 2}
+    assert set(exit) == {1}
+
+
+def test_scope_cancel_on_exc(run):
+    enter = []
+    exit = []
+
+    def _sleep(idx, t):
+        enter.append(idx)
+        yield tonio.sleep(t)
+        exit.append(idx)
+
+    def _run():
+        with contextlib.suppress(RuntimeError):
+            with tonio.scope(cancel_on_exc=True) as scope:
+                scope.spawn(_sleep(1, 0.1))
+                scope.spawn(_sleep(2, 2))
+                yield tonio.sleep(0.2)
+                raise RuntimeError
 
         yield scope()
         yield tonio.sleep(2)
