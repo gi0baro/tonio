@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import sys
 from functools import update_wrapper, wraps
 from typing import (
     IO,
@@ -103,10 +104,19 @@ class Path(pathlib.PurePath):
 
     _wrapped_cls: ClassVar[type[pathlib.Path]]
 
-    def __new__(cls, *args: str | os.PathLike[str]) -> Self:
-        if cls is Path:
-            cls = PosixPath  # type: ignore[assignment]
-        return super().__new__(cls, *args)
+    if sys.platform == 'win32':
+
+        def __new__(cls, *args: str | os.PathLike[str]) -> Self:
+            if cls is Path:
+                cls = WindowsPath  # type: ignore[assignment]
+            return super().__new__(cls, *args)
+
+    else:
+
+        def __new__(cls, *args: str | os.PathLike[str]) -> Self:
+            if cls is Path:
+                cls = PosixPath  # type: ignore[assignment]
+            return super().__new__(cls, *args)
 
     @classmethod
     @_wraps_async(pathlib.Path.cwd)
@@ -266,7 +276,16 @@ class Path(pathlib.PurePath):
         return pathlib.Path.as_uri(self)
 
 
-class PosixPath(Path, pathlib.PurePosixPath):
-    __slots__ = ()
+if sys.platform == 'win32':
 
-    _wrapped_cls: ClassVar[type[pathlib.Path]] = pathlib.PosixPath
+    class WindowsPath(Path, pathlib.PureWindowsPath):
+        __slots__ = ()
+
+        _wrapped_cls: ClassVar[type[pathlib.Path]] = pathlib.WindowsPath
+
+else:
+
+    class PosixPath(Path, pathlib.PurePosixPath):
+        __slots__ = ()
+
+        _wrapped_cls: ClassVar[type[pathlib.Path]] = pathlib.PosixPath

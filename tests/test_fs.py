@@ -1,8 +1,12 @@
 import pathlib
+import sys
 
 import pytest
 
 import tonio.fs as fs
+
+
+Path = fs.WindowsPath if sys.platform == 'win32' else fs.PosixPath
 
 
 @pytest.fixture
@@ -65,7 +69,7 @@ def test_readline_until_eof(run, tree):
 
 def test_sync_attrs_bypass_the_threadpool(run, tree):
     def _run():
-        f = yield fs.open(tree / 'a.txt', 'r')
+        f = yield fs.open(tree / 'a.txt', 'r', encoding='utf-8')
         snapshot = (
             f.name,
             f.mode,
@@ -133,7 +137,7 @@ def test_path_listings_are_reusable_lists(run, tree):
     for listing in (entries, globbed, rglobbed):
         assert isinstance(listing, list)
         assert len(listing) == len(list(listing)) == len(list(listing))
-        assert all(type(item) is fs.PosixPath for item in listing)
+        assert all(type(item) is Path for item in listing)
     assert sorted(p.name for p in entries) == ['a.txt', 'b.bin', 'sub']
     assert sorted(p.name for p in globbed) == ['a.txt']
     assert sorted(p.name for p in rglobbed) == ['a.txt', 'c.txt']
@@ -154,11 +158,11 @@ def test_path_returning_methods_return_tonio_paths(run, tmp_path):
             (yield fs.Path('~').expanduser()),
             (yield fs.Path.cwd()),
             (yield fs.Path.home()),
-            (yield fs.PosixPath.cwd()),
+            (yield Path.cwd()),
         ]
 
     for result in run(_run()):
-        assert type(result) is fs.PosixPath
+        assert type(result) is Path
 
 
 def test_path_walk_rebuilds_dirpaths(run, tree):
@@ -166,7 +170,7 @@ def test_path_walk_rebuilds_dirpaths(run, tree):
         return (yield fs.Path(tree).walk())
 
     walked = run(_run())
-    assert all(type(dirpath) is fs.PosixPath for dirpath, _, _ in walked)
+    assert all(type(dirpath) is Path for dirpath, _, _ in walked)
     assert {dirpath.name: sorted(files) for dirpath, _, files in walked} == {
         tree.name: ['a.txt', 'b.bin'],
         'sub': ['c.txt'],
@@ -198,7 +202,7 @@ def test_path_copy_accepts_every_path_flavour(run, tree, kind):
         return (yield (base / 'a.txt').copy(target))
 
     result = run(_run())
-    assert type(result) is fs.PosixPath
+    assert type(result) is Path
     assert raw.read_text() == 'l1\nl2\nl3\n'
 
 
@@ -212,7 +216,7 @@ def test_path_copy_into_and_move(run, tree):
         return copied, moved, moved_into
 
     copied, moved, moved_into = run(_run())
-    assert all(type(p) is fs.PosixPath for p in (copied, moved, moved_into))
+    assert all(type(p) is Path for p in (copied, moved, moved_into))
     assert (tree / 'sub' / 'a.txt').read_text() == 'l1\nl2\nl3\n'
     assert (tree / 'moved.bin').read_bytes() == b'\x00\x01\x02'
     assert not (tree / 'sub' / 'moved.bin').exists()
