@@ -935,6 +935,56 @@ async def main():
 ```
 </td></tr></table>
 
+### Markers
+
+The `mark` module provides decorator shortcuts for `spawn_blocking` and `Semaphore`:
+
+<table><tr><td>
+
+`yield` syntax
+
+```python
+import tonio
+
+# run through `spawn_blocking`
+@tonio.mark.blocking
+def read_file(path):
+    ...
+
+# no more than 2 running at the same time
+@tonio.mark.max_concurrency(2)
+def fetch(url):
+    ...
+
+# `blocking` + `max_concurrency`
+@tonio.mark.cpu_bound(4)
+def resize(image):
+    ...
+```
+</td><td>
+
+`await` syntax
+
+```python
+import tonio.colored as tonio
+
+# run through `spawn_blocking`
+@tonio.mark.blocking
+def read_file(path):
+    ...
+
+# no more than 2 running at the same time
+@tonio.mark.max_concurrency(2)
+async def fetch(url):
+    ...
+
+# `blocking` + `max_concurrency`
+@tonio.mark.cpu_bound(4)
+def resize(image):
+    ...
+```
+</td></tr></table>
+
 ### Network module
 
 Network primitives are exposed under the `tonio.net` module.

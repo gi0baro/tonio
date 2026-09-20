@@ -1,4 +1,4 @@
-from . import exceptions as exceptions, time as time
+from . import exceptions as exceptions, mark as mark, time as time
 from ._ctl import (
     as_completed as as_completed,
     block_on as block_on,
