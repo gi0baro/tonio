@@ -10,112 +10,25 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from contextlib import ExitStack
 from functools import partial
-from typing import (
-    TYPE_CHECKING,
-    Final,
-    Protocol,
-    TypeAlias,
-)
+from typing import TYPE_CHECKING
 
-from ._ctl import spawn, spawn_blocking
-from ._fd import FdStream, ProcFd, open_proc_fd
-from ._streams import _Stream
-from ._sync import Lock
-from ._types import Coro
-from .exceptions import ResourceBroken
+from ..._subprocess import HasFileno, StrOrBytesPath
+from ...exceptions import ResourceBroken
+from .._ctl import spawn, spawn_blocking
+from .._fd import FdStream
+
+
+if sys.platform == 'win32':
+    from ._win import Process as Process
+else:
+    from ._unix import Process as Process
 
 
 if TYPE_CHECKING:
-    import signal
     from collections.abc import Sequence
-
-StrOrBytesPath: TypeAlias = str | bytes | os.PathLike[str] | os.PathLike[bytes]
-
-
-class HasFileno(Protocol):
-    def fileno(self) -> int: ...
-
-
-class Process:
-    universal_newlines: Final = False
-    encoding: Final = None
-    errors: Final = None
-
-    def __init__(
-        self,
-        popen: subprocess.Popen[bytes],
-        stdin: _Stream | None,
-        stdout: _Stream | None,
-        stderr: _Stream | None,
-    ) -> None:
-        self._proc = popen
-        self.stdin = stdin
-        self.stdout = stdout
-        self.stderr = stderr
-
-        self.stdio: tuple[_Stream, _Stream] | None = None
-        if self.stdin is not None and self.stdout is not None:
-            self.stdio = (self.stdin, self.stdout)
-
-        self._wait_lock: Lock = Lock()
-
-        self._pidfd: ProcFd | None = open_proc_fd(self._proc.pid)
-        self.args: StrOrBytesPath | Sequence[StrOrBytesPath] = self._proc.args
-        self.pid: int = self._proc.pid
-
-    def __repr__(self) -> str:
-        returncode = self.returncode
-        if returncode is None:
-            status = f'running with PID {self.pid}'
-        else:
-            if returncode < 0:
-                status = f'exited with signal {-returncode}'
-            else:
-                status = f'exited with status {returncode}'
-        return f'<tonio.Process {self.args!r}: {status}>'
-
-    @property
-    def returncode(self) -> int | None:
-        result = self._proc.poll()
-        if result is not None:
-            self._close_pidfd()
-        return result
-
-    def _close_pidfd(self) -> None:
-        if (pidfd := self._pidfd) is not None:
-            pidfd.close()
-            self._pidfd = None
-
-    def wait(self) -> Coro[int]:
-        with (yield self._wait_lock()):
-            if self.poll() is None:
-                if (pidfd := self._pidfd) is not None:
-                    if (waiter := pidfd._io_arm_r()) is not None:
-                        yield waiter
-                else:
-                    #: pidfd should never be None. but, apparently, on kqueue
-                    #  there's a race condition where it says the process
-                    #  doesn't exist before `waitpid` says it hasn't exited yet.
-                    #  we do a runtime suspension to "mitigate" the next blocking wait.
-                    yield
-                self._proc.wait()
-                self._close_pidfd()
-
-        return self._proc.returncode
-
-    def poll(self) -> int | None:
-        return self.returncode
-
-    def send_signal(self, sig: signal.Signals | int) -> None:
-        self._proc.send_signal(sig)
-
-    def terminate(self) -> None:
-        self._proc.terminate()
-
-    def kill(self) -> None:
-        self._proc.kill()
 
 
 def _pipe_to_child_stdin():
@@ -128,14 +41,14 @@ def _pipe_from_child_output():
     return FdStream(rfd), wfd
 
 
-def open_process(
+async def open_process(
     command: StrOrBytesPath | Sequence[StrOrBytesPath],
     *,
     stdin: int | HasFileno | None = None,
     stdout: int | HasFileno | None = None,
     stderr: int | HasFileno | None = None,
     **options: object,
-) -> Coro[Process]:
+) -> Process:
     for key in ('universal_newlines', 'text', 'encoding', 'errors', 'bufsize'):
         if options.get(key):
             raise TypeError(
@@ -174,7 +87,7 @@ def open_process(
             always_cleanup.callback(os.close, stderr)
             cleanup_on_fail.callback(wstderr.close)
 
-        popen = yield spawn_blocking(
+        popen = await spawn_blocking(
             partial(
                 subprocess.Popen,
                 command,
@@ -189,7 +102,7 @@ def open_process(
     return Process(popen, wstdin, wstdout, wstderr)
 
 
-def run_process(
+async def run_process(
     command: StrOrBytesPath | Sequence[StrOrBytesPath],
     *,
     stdin: bytes | bytearray | memoryview | int | HasFileno | None = b'',
@@ -197,7 +110,7 @@ def run_process(
     capture_stderr: bool = False,
     check: bool = True,
     **options: object,
-) -> Coro[subprocess.CompletedProcess[bytes]]:
+) -> subprocess.CompletedProcess[bytes]:
     if isinstance(stdin, str):
         raise UnicodeError('process stdin must be bytes, not str')
     if isinstance(stdin, (bytes, bytearray, memoryview)):
@@ -219,22 +132,22 @@ def run_process(
     stdout_chunks: list[bytes | bytearray] = []
     stderr_chunks: list[bytes | bytearray] = []
 
-    def feed_input(stream):
+    async def feed_input(stream):
         with stream:
             try:
-                yield stream.send_all(input_)
+                await stream.send_all(input_)
             except ResourceBroken:
                 pass
 
-    def read_output(stream, chunks):
+    async def read_output(stream, chunks):
         with stream:
             while True:
-                chunk = yield stream.receive_some()
+                chunk = await stream.receive_some()
                 if not chunk:
                     break
                 chunks.append(chunk)
 
-    proc = yield open_process(command, **options)
+    proc = await open_process(command, **options)
     tasks = []
     if input_ is not None:
         tasks.append(feed_input(proc.stdin))
@@ -249,8 +162,8 @@ def run_process(
         proc.stderr = None
 
     tasks = spawn.without_results(*tasks)
-    yield proc.wait()
-    yield tasks
+    await proc.wait()
+    await tasks
 
     stdout = b''.join(stdout_chunks) if capture_stdout else None
     stderr = b''.join(stderr_chunks) if capture_stderr else None

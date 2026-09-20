@@ -12,10 +12,12 @@ use std::sync::OnceLock;
 mod blocking;
 mod errors;
 mod events;
+#[cfg(unix)]
 mod fd;
 mod handles;
 mod io;
 mod net;
+#[cfg(unix)]
 mod proc;
 mod py;
 mod runtime;
@@ -76,9 +78,11 @@ fn _tonio(module: &Bound<PyModule>) -> PyResult<()> {
     blocking::init_pymodule(module)?;
     errors::init_pymodule(module)?;
     events::init_pymodule(module)?;
+    #[cfg(unix)]
     fd::init_pymodule(module)?;
     io::init_pymodule(module)?;
     net::init_pymodule(module)?;
+    #[cfg(unix)]
     proc::init_pymodule(module)?;
     runtime::init_pymodule(module)?;
     scope::init_pymodule(module)?;

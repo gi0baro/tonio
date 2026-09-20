@@ -3,7 +3,10 @@ use std::sync::{Arc, atomic};
 use mio::Interest;
 use pyo3::prelude::*;
 
-use crate::{events::Waiter, io::schedule::ScheduledIO};
+use crate::{
+    events::Waiter,
+    io::{RawFd, schedule::ScheduledIO},
+};
 
 #[pyclass(frozen, subclass, module = "tonio._tonio")]
 pub(crate) struct Socket {
@@ -24,7 +27,7 @@ impl Socket {
         #[allow(clippy::cast_possible_wrap)]
         let io = runtime
             .get()
-            .io_register(fd as i32, Interest::READABLE | Interest::WRITABLE)?;
+            .io_register(fd as RawFd, Interest::READABLE | Interest::WRITABLE)?;
 
         Ok(Self {
             _sock: stdlib_sock,

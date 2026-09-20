@@ -1,8 +1,11 @@
+#[cfg(unix)]
+use std::os::fd::FromRawFd;
+#[cfg(windows)]
+use std::os::windows::io::{BorrowedSocket, FromRawSocket};
 use std::{
     cell::Cell,
     collections::BinaryHeap,
     io::Read,
-    os::fd::FromRawFd,
     sync::{Arc, Condvar, Mutex, atomic},
     thread,
     time::{Duration, Instant},
@@ -10,6 +13,8 @@ use std::{
 
 use crossbeam_deque::{Injector, Worker};
 use crossbeam_utils::sync::Parker;
+#[cfg(unix)]
+use mio::unix::SourceFd;
 use mio::{Interest, Poll, Token, Waker, event};
 use pyo3::prelude::*;
 
@@ -19,9 +24,8 @@ use crate::{
     blocking::BlockingRunnerPool,
     handles::BoxedHandle,
     io::{
-        TOKEN_SIGNALS, TOKEN_WAKER,
+        RawFd, TOKEN_SIGNALS, TOKEN_WAKER,
         schedule::{ScheduledIO, readiness_from_event},
-        source::Source,
     },
     // py::copy_context,
     time::Timer,
@@ -32,6 +36,8 @@ pub struct RuntimeState {
     buf: Box<[u8]>,
     io: Poll,
     sig_sock: (socket2::Socket, socket2::Socket),
+    #[cfg(windows)]
+    sig_err: Option<PyErr>,
 }
 
 #[pyclass(frozen, subclass, module = "tonio._tonio")]
@@ -40,6 +46,12 @@ pub struct Runtime {
     io_registry: arc_swap::ArcSwapOption<mio::Registry>,
     io_pending_release: Mutex<Vec<Arc<ScheduledIO>>>,
     io_needs_release: atomic::AtomicBool,
+    #[cfg(windows)]
+    io_sources: papaya::HashMap<usize, Mutex<mio::IoSource<BorrowedSocket<'static>>>>,
+    #[cfg(windows)]
+    io_pending_rearm: Mutex<Vec<usize>>,
+    #[cfg(windows)]
+    io_needs_rearm: atomic::AtomicBool,
     waker: arc_swap::ArcSwapOption<Waker>,
     handles_sched: Mutex<BinaryHeap<Timer>>,
     blocking_pool: BlockingRunnerPool,
@@ -77,6 +89,24 @@ impl Runtime {
         //        so no future batch can carry its token
         if self.io_needs_release.swap(false, atomic::Ordering::Acquire) {
             self.io_pending_release.lock().unwrap().clear();
+        }
+
+        //: re-arm interests (AFD polls are one-shot)
+        #[cfg(windows)]
+        if self.io_needs_rearm.swap(false, atomic::Ordering::Acquire) {
+            let pending = std::mem::take(&mut *self.io_pending_rearm.lock().unwrap());
+            let regs = self.io_registrations.pin();
+            let sources = self.io_sources.pin();
+            for token in pending {
+                if let (Some(io), Some(source)) = (regs.get(&token), sources.get(&token))
+                    && let Some(interest) = io.wanted_interest()
+                {
+                    _ = state
+                        .io
+                        .registry()
+                        .reregister(&mut *source.lock().unwrap(), Token(token), interest);
+                }
+            }
         }
 
         //: get proper poll timeout
@@ -154,16 +184,26 @@ impl Runtime {
         poll_result
     }
 
-    pub(crate) fn io_register(&self, fd: i32, interest: Interest) -> anyhow::Result<Arc<ScheduledIO>> {
+    pub(crate) fn io_register(&self, fd: RawFd, interest: Interest) -> anyhow::Result<Arc<ScheduledIO>> {
         let registry = self.io_registry.load_full().expect("runtime is not running");
         let io = Arc::new(ScheduledIO::new(fd));
         let token = Arc::as_ptr(&io).expose_provenance();
         self.io_registrations.pin().insert(token, io.clone());
-        let mut source = Source::FD(fd);
+
+        #[cfg(unix)]
+        let mut source = SourceFd(&fd);
+
+        #[cfg(windows)]
+        let mut source = mio::IoSource::new(unsafe { BorrowedSocket::borrow_raw(fd) });
+
         if let Err(err) = registry.register(&mut source, Token(token), interest) {
             self.io_registrations.pin().remove(&token);
             return Err(err.into());
         }
+
+        #[cfg(windows)]
+        self.io_sources.pin().insert(token, Mutex::new(source));
+
         Ok(io)
     }
 
@@ -171,9 +211,19 @@ impl Runtime {
         let token = Arc::as_ptr(io).expose_provenance();
         let regs = self.io_registrations.pin();
         if let Some(io) = regs.remove(&token) {
+            #[cfg(unix)]
             if let Some(registry) = self.io_registry.load().as_ref() {
-                let mut source = Source::FD(io.fd);
-                _ = registry.deregister(&mut source);
+                _ = registry.deregister(&mut SourceFd(&io.fd));
+            }
+            #[cfg(windows)]
+            {
+                let sources = self.io_sources.pin();
+                if let Some(source) = sources.get(&token)
+                    && let Some(registry) = self.io_registry.load().as_ref()
+                {
+                    _ = registry.deregister(&mut *source.lock().unwrap());
+                }
+                sources.remove(&token);
             }
             //: shutdown any leftofer work
             let (reader, writer) = io.shutdown();
@@ -186,6 +236,14 @@ impl Runtime {
             //: add to the release queue
             self.io_pending_release.lock().unwrap().push(io.clone());
             self.io_needs_release.store(true, atomic::Ordering::Release);
+        }
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn io_rearm(&self, token: usize) {
+        self.io_pending_rearm.lock().unwrap().push(token);
+        if !self.io_needs_rearm.swap(true, atomic::Ordering::AcqRel) {
+            self.wake();
         }
     }
 
@@ -215,6 +273,7 @@ impl Runtime {
         len
     }
 
+    #[cfg(unix)]
     #[inline(always)]
     fn handle_io_signals(&self, py: Python, state: &mut RuntimeState) {
         let sock = &mut state.sig_sock.0;
@@ -226,6 +285,37 @@ impl Runtime {
                     self.add_io_handle(Box::new(event.clone_ref(py)));
                 }
             }
+        }
+    }
+
+    #[cfg(windows)]
+    #[inline(always)]
+    fn handle_io_signals(&self, py: Python, state: &mut RuntimeState) {
+        let sock = &mut state.sig_sock.0;
+        let read = self.read_from_sock(sock, &mut state.buf);
+        if let Some(source) = self.io_sources.pin().get(&TOKEN_SIGNALS) {
+            _ = state
+                .io
+                .registry()
+                .reregister(&mut *source.lock().unwrap(), Token(TOKEN_SIGNALS), Interest::READABLE);
+        }
+        if read == 0 {
+            return;
+        }
+
+        let listening = self.sig_listening.load(atomic::Ordering::Relaxed);
+        let mut unhandled = false;
+        {
+            let handlers = self.sig_handlers.pin();
+            for sig in &state.buf[..read] {
+                match handlers.get(sig) {
+                    Some(event) if listening => self.add_io_handle(Box::new(event.clone_ref(py))),
+                    _ => unhandled = true,
+                }
+            }
+        }
+        if unhandled && let Err(err) = py.check_signals() {
+            state.sig_err = Some(err);
         }
     }
 
@@ -244,6 +334,8 @@ impl Runtime {
             .load()
             .call_method0(py, pyo3::intern!(py, "fileno"))?
             .extract(py)?;
+
+        #[cfg(unix)]
         let socks = unsafe {
             (
                 #[allow(clippy::cast_possible_wrap)]
@@ -252,14 +344,29 @@ impl Runtime {
                 socket2::Socket::from_raw_fd(fdw as i32),
             )
         };
+        #[cfg(windows)]
+        let socks = unsafe {
+            (
+                socket2::Socket::from_raw_socket(fdr as RawFd),
+                socket2::Socket::from_raw_socket(fdw as RawFd),
+            )
+        };
 
-        let mut source = Source::FD(fdr.try_into()?);
+        #[cfg(unix)]
+        let fdr: RawFd = fdr.try_into()?;
+        #[cfg(unix)]
+        let mut source = SourceFd(&fdr);
+        #[cfg(windows)]
+        let mut source = mio::IoSource::new(unsafe { BorrowedSocket::borrow_raw(fdr as RawFd) });
 
         registry.register(&mut source, Token(TOKEN_SIGNALS), Interest::READABLE)?;
+        #[cfg(windows)]
+        self.io_sources.pin().insert(TOKEN_SIGNALS, Mutex::new(source));
 
         Ok(socks)
     }
 
+    #[cfg(unix)]
     fn drop_sig_socket(&self, py: Python, state: &mut RuntimeState) -> anyhow::Result<()> {
         let fd: usize = self
             .ssock_r
@@ -267,18 +374,31 @@ impl Runtime {
             .call_method0(py, pyo3::intern!(py, "fileno"))?
             .extract(py)?;
         #[allow(clippy::cast_possible_wrap)]
-        let mut source = Source::FD(fd as i32);
-        state.io.registry().deregister(&mut source)?;
+        let fd = fd as i32;
+        state.io.registry().deregister(&mut SourceFd(&fd))?;
 
         Ok(())
     }
 
     fn cleanup_io(&self, state: &mut RuntimeState) {
         let regs = self.io_registrations.pin();
+        #[cfg(unix)]
         for (_, io) in &regs {
-            let mut source = Source::FD(io.fd);
-            _ = state.io.registry().deregister(&mut source);
+            _ = state.io.registry().deregister(&mut SourceFd(&io.fd));
             _ = io.shutdown();
+        }
+        #[cfg(windows)]
+        {
+            let sources = self.io_sources.pin();
+            for (_, source) in &sources {
+                _ = state.io.registry().deregister(&mut *source.lock().unwrap());
+            }
+            sources.clear();
+            for (_, io) in &regs {
+                _ = io.shutdown();
+            }
+            self.io_needs_rearm.store(false, atomic::Ordering::Release);
+            self.io_pending_rearm.lock().unwrap().clear();
         }
         regs.clear();
         self.io_needs_release.store(false, atomic::Ordering::Release);
@@ -286,7 +406,10 @@ impl Runtime {
     }
 
     fn teardown(&self, py: Python, state: &mut RuntimeState, threads_cvar: Arc<(Mutex<usize>, Condvar)>) {
-        _ = self.drop_sig_socket(py, state);
+        #[cfg(unix)]
+        {
+            _ = self.drop_sig_socket(py, state);
+        }
         self.cleanup_io(state);
         self.stop_threads(py, threads_cvar);
         self.work_schedule.swap(None);
@@ -362,6 +485,12 @@ impl Runtime {
             io_registry: None.into(),
             io_pending_release: Mutex::new(Vec::new()),
             io_needs_release: atomic::AtomicBool::new(false),
+            #[cfg(windows)]
+            io_sources: papaya::HashMap::with_capacity(128),
+            #[cfg(windows)]
+            io_pending_rearm: Mutex::new(Vec::new()),
+            #[cfg(windows)]
+            io_needs_rearm: atomic::AtomicBool::new(false),
             waker: None.into(),
             handles_sched: Mutex::new(BinaryHeap::with_capacity(32)),
             blocking_pool: BlockingRunnerPool::new(threads_blocking, threads_blocking_timeout),
@@ -529,6 +658,8 @@ impl Runtime {
             buf: vec![0; 4096].into_boxed_slice(),
             io: poll,
             sig_sock,
+            #[cfg(windows)]
+            sig_err: None,
         };
 
         rself.io_registry.swap(Some(Arc::new(registry)));
@@ -582,6 +713,11 @@ impl Runtime {
                 }
                 rself.teardown(py, &mut state, threads_cb_cvar);
                 return Err(err.into());
+            }
+            #[cfg(windows)]
+            if let Some(pyerr) = state.sig_err.take() {
+                rself.teardown(py, &mut state, threads_cb_cvar);
+                return Err(pyerr);
             }
         }
 

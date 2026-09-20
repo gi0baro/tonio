@@ -4,7 +4,7 @@ TonIO is a multi-threaded async runtime for free-threaded Python, built in Rust 
 
 > **Warning**: TonIO is currently a work in progress and in alpha state. The APIs are subtle to breaking changes.
 
-> **Note:** TonIO is available on free-threaded Python and Unix systems only.
+> **Note:** TonIO is available on free-threaded Python only. Windows is supported on a best-effort basis.
 
 TonIO supports both using `yield` and the more canonical `async/await` notations, with the latter being available as part of the `tonio.colored` module. Following code snippets show both the usages.
 
@@ -1316,6 +1316,8 @@ The `Process` object exposes:
 > **Note:** unlike `run_process`, `open_process` does not reap the child for you: remember to `wait` on it — possibly after a `kill` — otherwise the child outlives your task.
 
 > **Note:** processes in TonIO only communicate over unbuffered byte streams: the `universal_newlines`, `text`, `encoding`, `errors` and `bufsize` options of `subprocess` are not supported.
+
+> **Note:** on Windows, due to the platform's lack of features, the subprocess readiness implementation falls back to the blocking thread-pool. Thus, waiting on a process or read/write operations on pipes can't be interrupted while blocked: cancellations take effect only once the OS call returns.
 
 ### Signals
 

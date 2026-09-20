@@ -19,6 +19,7 @@ from tonio.colored.net import (
 
 
 _SIZE = 1024 * 1024
+skip_win = pytest.mark.skipif(sys.platform == 'win32', reason='Unix sockets')
 
 
 # AF_UNIX paths are capped at ~104 bytes on darwin, so keep the tmp root and the
@@ -94,6 +95,7 @@ def test_streams_tcp_send(run):
     assert state['data'] == b'a' * _SIZE
 
 
+@skip_win
 def test_streams_unix_roundtrip(run):
     path = _sock_path()
 
@@ -126,6 +128,7 @@ def test_streams_unix_roundtrip(run):
     assert stat.S_ISSOCK(os.stat(path).st_mode)
 
 
+@skip_win
 def test_streams_unix_listener_accept(run):
     path = _sock_path()
 
@@ -153,6 +156,7 @@ def test_streams_unix_listener_accept(run):
     assert os.path.exists(path)
 
 
+@skip_win
 def test_streams_unix_mode(run):
     path = _sock_path()
 
@@ -164,6 +168,7 @@ def test_streams_unix_mode(run):
     assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
 
 
+@skip_win
 def test_streams_unix_addr_in_use(run):
     path = _sock_path()
 
@@ -181,6 +186,7 @@ def test_streams_unix_addr_in_use(run):
     run(main())
 
 
+@skip_win
 def test_streams_unix_missing_folder(run):
     path = os.path.join(tempfile.mkdtemp(), 'nope', 's')
 

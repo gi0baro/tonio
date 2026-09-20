@@ -8,6 +8,7 @@ classifiers = [
     'Intended Audience :: Developers',
     'License :: OSI Approved :: BSD License',
     'Operating System :: MacOS',
+    'Operating System :: Microsoft :: Windows',
     'Operating System :: POSIX :: Linux',
     'Programming Language :: Python :: Free Threading :: 3 - Stable',
     'Programming Language :: Python :: 3 :: Only',

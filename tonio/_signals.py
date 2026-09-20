@@ -1,5 +1,6 @@
 import errno
 import signal
+import sys
 import threading
 
 from ._tonio import get_runtime
@@ -61,20 +62,36 @@ def _set_sig_wfd(fd):
     return signal.set_wakeup_fd(fd)
 
 
-def _sig_add(sig):
-    if not _is_main_thread():
-        raise ValueError('Signals can only be handled from the main thread')
+if sys.platform == 'win32':
 
-    _check_sig(sig)
-    try:
-        # register a dummy signal handler so Python will write the signal no in the wakeup fd
-        signal.signal(sig, _noop)
-        # set SA_RESTART to limit EINTR occurrences
-        signal.siginterrupt(sig, False)
-    except OSError as exc:
-        if exc.errno == errno.EINVAL:
-            raise RuntimeError(f'signum {sig} cannot be caught')
-        raise
+    def _sig_add(sig):
+        if not _is_main_thread():
+            raise ValueError('Signals can only be handled from the main thread')
+
+        _check_sig(sig)
+        try:
+            # register a dummy signal handler so Python will write the signal no in the wakeup fd
+            signal.signal(sig, _noop)
+        except OSError as exc:
+            if exc.errno == errno.EINVAL:
+                raise RuntimeError(f'signum {sig} cannot be caught')
+            raise
+else:
+
+    def _sig_add(sig):
+        if not _is_main_thread():
+            raise ValueError('Signals can only be handled from the main thread')
+
+        _check_sig(sig)
+        try:
+            # register a dummy signal handler so Python will write the signal no in the wakeup fd
+            signal.signal(sig, _noop)
+            # set SA_RESTART to limit EINTR occurrences
+            signal.siginterrupt(sig, False)
+        except OSError as exc:
+            if exc.errno == errno.EINVAL:
+                raise RuntimeError(f'signum {sig} cannot be caught')
+            raise
 
 
 def _sig_rem(sig):

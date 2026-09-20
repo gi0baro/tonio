@@ -1,7 +1,7 @@
 import os
 
-from .._fd import FdStream as _FdStream
-from ..exceptions import ResourceBroken
+from ..._fd._unix import FdStream as _FdStream
+from ...exceptions import ResourceBroken
 
 
 class FdStream(_FdStream):

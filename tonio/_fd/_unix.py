@@ -1,10 +1,10 @@
 import os
 
-from ._streams import _Stream
-from ._sync import Lock
-from ._tonio import Fd as _Fd, ProcFd as _ProcFd
-from ._types import Coro
-from .exceptions import ResourceBroken
+from .._streams import _Stream
+from .._sync import Lock
+from .._tonio import Fd as _Fd, ProcFd as _ProcFd
+from .._types import Coro
+from ..exceptions import ResourceBroken
 
 
 class _FdImpl:
