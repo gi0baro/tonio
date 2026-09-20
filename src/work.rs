@@ -56,15 +56,15 @@ impl WorkSchedule {
     }
 
     //: wake one parked worker to scan for work, with throttling.
-    //  atomic order preservation is guaranteed by crossbeam-deque
-    //  publish being SeqCst RMW.
+    //  atomic order preservation on the worker side is guaranteed by
+    //  crossbeam-deque publish being SeqCst RMW.
     pub fn unpark_one(&self) {
-        if self.idle_count.load(atomic::Ordering::Acquire) == 0 {
+        if self.idle_count.load(atomic::Ordering::SeqCst) == 0 {
             return;
         }
         if self
             .speculation
-            .compare_exchange(0, 1, atomic::Ordering::AcqRel, atomic::Ordering::Relaxed)
+            .compare_exchange(0, 1, atomic::Ordering::SeqCst, atomic::Ordering::SeqCst)
             .is_err()
         {
             return;
@@ -74,7 +74,7 @@ impl WorkSchedule {
 
     //: "forcefully" a parked worker regardless of "speculation" state.
     pub fn unpark(&self) {
-        if self.idle_count.load(atomic::Ordering::Acquire) == 0 {
+        if self.idle_count.load(atomic::Ordering::SeqCst) == 0 {
             return;
         }
         self.speculation.fetch_add(1, atomic::Ordering::AcqRel);
