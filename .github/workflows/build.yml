@@ -33,6 +33,10 @@ jobs:
             platform: linux
             target: armv7
             manylinux: musllinux_1_1
+          - os: windows
+            platform: windows
+            target: x86_64
+            interpreter: 3.14t
         exclude:
           - os: ubuntu
             target: x86_64
