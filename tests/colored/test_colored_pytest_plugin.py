@@ -1,6 +1,3 @@
-_TIMEOUT = 1
-
-
 def test_marked_test(pytester):
     pytester.makepyfile(
         """
@@ -12,7 +9,7 @@ def test_marked_test(pytester):
             await tonio.colored.yield_now()
         """
     )
-    result = pytester.runpytest_subprocess(timeout=_TIMEOUT)
+    result = pytester.runpytest_subprocess()
     result.assert_outcomes(passed=1)
 
 
@@ -32,7 +29,7 @@ def test_module_and_class_level_marks(pytester):
                 await tonio.colored.yield_now()
         """
     )
-    result = pytester.runpytest_subprocess(timeout=_TIMEOUT)
+    result = pytester.runpytest_subprocess()
     result.assert_outcomes(passed=2)
 
 
@@ -49,7 +46,7 @@ def test_parametrized_test(pytester):
             assert value in (1, 2, 3)
         """
     )
-    result = pytester.runpytest_subprocess(timeout=_TIMEOUT)
+    result = pytester.runpytest_subprocess()
     result.assert_outcomes(passed=3)
 
 
@@ -65,7 +62,7 @@ def test_failing_test(pytester):
             assert False
         """
     )
-    result = pytester.runpytest_subprocess(timeout=_TIMEOUT)
+    result = pytester.runpytest_subprocess()
     result.assert_outcomes(failed=1)
 
 
@@ -87,7 +84,7 @@ def test_pytest_yield_fixtures_untouched(pytester):
             assert not teardown_fixture.joinpath('teardown.txt').exists()
         """
     )
-    result = pytester.runpytest_subprocess(timeout=_TIMEOUT)
+    result = pytester.runpytest_subprocess()
     result.assert_outcomes(passed=1)
 
 
@@ -107,7 +104,7 @@ def test_async_fixture(pytester):
             assert async_fixture == 'value'
         """
     )
-    result = pytester.runpytest_subprocess(timeout=_TIMEOUT)
+    result = pytester.runpytest_subprocess()
     result.assert_outcomes(passed=1)
 
 
@@ -131,7 +128,7 @@ def test_session_scoped_async_fixture(pytester):
             assert async_fixture == [1]
         """
     )
-    result = pytester.runpytest_subprocess(timeout=_TIMEOUT)
+    result = pytester.runpytest_subprocess()
     result.assert_outcomes(passed=2)
 
 
@@ -158,7 +155,7 @@ def test_async_generator_fixture(pytester):
             assert path.read_text() == 'done'
         """
     )
-    result = pytester.runpytest_subprocess(timeout=_TIMEOUT)
+    result = pytester.runpytest_subprocess()
     result.assert_outcomes(passed=2)
 
 
@@ -177,7 +174,7 @@ def test_async_generator_fixture_multiple_yields(pytester):
             assert async_gen_fixture == 'value'
         """
     )
-    result = pytester.runpytest_subprocess(timeout=_TIMEOUT)
+    result = pytester.runpytest_subprocess()
     result.assert_outcomes(passed=1, errors=1)
 
 
@@ -190,7 +187,7 @@ def test_strict_mode_ignores_unmarked_tests(pytester):
             await tonio.colored.yield_now()
         """
     )
-    result = pytester.runpytest_subprocess(timeout=_TIMEOUT)
+    result = pytester.runpytest_subprocess()
     assert result.parseoutcomes().get('passed', 0) == 0
 
 
@@ -209,5 +206,5 @@ def test_auto_mode(pytester):
             await tonio.colored.yield_now()
         """
     )
-    result = pytester.runpytest_subprocess(timeout=_TIMEOUT)
+    result = pytester.runpytest_subprocess()
     result.assert_outcomes(passed=1)

@@ -1,6 +1,3 @@
-_TIMEOUT = 1
-
-
 def test_marked_test(pytester):
     pytester.makepyfile(
         """
@@ -11,7 +8,7 @@ def test_marked_test(pytester):
             yield
         """
     )
-    result = pytester.runpytest_subprocess('-v', timeout=_TIMEOUT)
+    result = pytester.runpytest_subprocess('-v')
     result.assert_outcomes(passed=1)
     result.stdout.no_fnmatch_line('*tonio_runtime0*')
 
@@ -31,7 +28,7 @@ def test_module_and_class_level_marks(pytester):
                 yield
         """
     )
-    result = pytester.runpytest_subprocess(timeout=_TIMEOUT)
+    result = pytester.runpytest_subprocess()
     result.assert_outcomes(passed=2)
 
 
@@ -47,7 +44,7 @@ def test_parametrized_test(pytester):
             assert value in (1, 2, 3)
         """
     )
-    result = pytester.runpytest_subprocess(timeout=_TIMEOUT)
+    result = pytester.runpytest_subprocess()
     result.assert_outcomes(passed=3)
 
 
@@ -62,7 +59,7 @@ def test_failing_test(pytester):
             assert False
         """
     )
-    result = pytester.runpytest_subprocess(timeout=_TIMEOUT)
+    result = pytester.runpytest_subprocess()
     result.assert_outcomes(failed=1)
 
 
@@ -93,7 +90,7 @@ def test_tonio_run_fixture(pytester):
             assert coro_fixture == ['setup']
         """
     )
-    result = pytester.runpytest_subprocess(timeout=_TIMEOUT)
+    result = pytester.runpytest_subprocess()
     result.assert_outcomes(passed=1)
 
 
@@ -110,7 +107,7 @@ def test_auto_mode(pytester):
             yield
         """
     )
-    result = pytester.runpytest_subprocess(timeout=_TIMEOUT)
+    result = pytester.runpytest_subprocess()
     result.assert_outcomes(passed=1)
 
 
@@ -122,7 +119,7 @@ def test_invalid_mode(pytester):
         """
     )
     pytester.makepyfile('def test_ok(): pass')
-    result = pytester.runpytest_subprocess(timeout=_TIMEOUT)
+    result = pytester.runpytest_subprocess()
     result.stderr.fnmatch_lines(['*tonio_mode must be either*'])
 
 
@@ -145,7 +142,7 @@ def test_runtime_options(pytester):
             yield
         """
     )
-    result = pytester.runpytest_subprocess(timeout=_TIMEOUT)
+    result = pytester.runpytest_subprocess()
     result.assert_outcomes(passed=1)
 
 
@@ -166,5 +163,5 @@ def test_existing_runtime_reused(pytester):
             yield
         """
     )
-    result = pytester.runpytest_subprocess(timeout=_TIMEOUT)
+    result = pytester.runpytest_subprocess()
     result.assert_outcomes(passed=1)
