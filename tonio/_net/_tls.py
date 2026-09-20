@@ -12,7 +12,7 @@ import threading
 from typing import Any
 
 from .._sync import Lock
-from .._tonio import ResourceBroken, TLSStream as _TLSStream
+from .._tonio import ResourceBroken, TLSStream as _TLSStream, WouldBlock, get_runtime
 from .._types import Coro
 from ._streams import _Stream
 
@@ -79,6 +79,13 @@ class _SSLProxy:
 
     def _read(self, max_bytes: int) -> tuple[Any, bool, bytes]:
         return self._step(self._inner.read, max_bytes)
+
+    def _read_nowait(self, max_bytes: int) -> tuple[Any, bool]:
+        with self._lock:
+            try:
+                return self._inner.read(max_bytes), False
+            except _stdlib_ssl.SSLWantReadError:
+                return None, True
 
     def _write(self, data) -> tuple[Any, bool, bytes]:
         return self._step(self._inner.write, data)
@@ -215,6 +222,72 @@ class TLSStream(_Stream, _TLSStream):
             if self._compat_https and _is_eof(exc.__cause__):
                 return b''
             raise
+
+    def wait_readable(self, timeout: int | float | None = None) -> Coro[bool]:
+        self._check_ready()
+        if self._ssl.pending() or self._ssl._ingress_pending:
+            return True
+        if timeout is None:
+            with (yield self._lock_recv()):
+                if self._ssl.pending() or self._ssl._ingress_pending:
+                    return True
+                return (yield self.transport.wait_readable())
+        runtime = get_runtime()
+        deadline = runtime._clock + round(timeout * 1_000_000)
+        with (yield self._lock_recv()):
+            if self._ssl.pending() or self._ssl._ingress_pending:
+                return True
+            return (yield self.transport.wait_readable(max(deadline - runtime._clock, 0) / 1_000_000))
+
+    def wait_writable(self, timeout: int | float | None = None) -> Coro[bool]:
+        self._check_ready()
+        if timeout is None:
+            with (yield self._lock_send()):
+                return (yield self.transport.wait_writable())
+        runtime = get_runtime()
+        deadline = runtime._clock + round(timeout * 1_000_000)
+        with (yield self._lock_send()):
+            return (yield self.transport.wait_writable(max(deadline - runtime._clock, 0) / 1_000_000))
+
+    def receive_some_nowait(self, max_bytes: int | None = None) -> bytes | bytearray | type[_Stream.NotReady]:
+        self._check_ready()
+        if max_bytes is None:
+            max_bytes = max(self._recv_est_size, self._ssl._ingress_pending)
+        try:
+            while True:
+                try:
+                    ret, want_read = self._ssl._read_nowait(max_bytes)
+                except (_stdlib_ssl.SSLError, _stdlib_ssl.CertificateError) as exc:
+                    self._set_broken()
+                    raise ResourceBroken from exc
+                if not want_read:
+                    return ret
+
+                try:
+                    lock = self._lock_recv.or_raise()
+                except WouldBlock:
+                    return self.NotReady
+                with lock:
+                    if (data := self.transport.receive_some_nowait()) is self.NotReady:
+                        return self.NotReady
+                    if not data:
+                        self._ssl._ingress_write_eof()
+                    else:
+                        self._recv_est_size = max(
+                            self._recv_est_size,
+                            len(data),
+                        )
+                        self._ssl._ingress_write(data)
+                    self._recv_count += 1
+        except ResourceBroken as exc:
+            if self._compat_https and _is_eof(exc.__cause__):
+                return b''
+            raise
+
+    def try_receive_some(self, max_bytes: int | None = None) -> bytes | bytearray:
+        if (ret := self.receive_some_nowait(max_bytes)) is self.NotReady:
+            raise WouldBlock('Not ready')
+        return ret
 
     def close(self) -> Coro[None]:
         if self._state == 4:

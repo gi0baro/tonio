@@ -6,6 +6,7 @@ from types import CoroutineType
 from typing import Any
 
 from ..._net._streams import _ignorable_accept_errnos, _Stream
+from ..._tonio import WouldBlock, get_runtime
 from ._socket import _Socket
 
 
@@ -47,6 +48,48 @@ class SocketStream(_Stream):
     def receive_some(self, max_bytes: int | None = None) -> CoroutineType[Any, Any, bytes]:
         max_bytes = max_bytes or 65536
         return self.socket.recv(max_bytes)
+
+    async def wait_readable(self, timeout: int | float | None = None) -> bool:
+        if timeout is None:
+            while (waiter := self.socket._io_arm_r()) is not None:
+                await waiter
+            return True
+        runtime = get_runtime()
+        remaining = round(max(timeout, 0) * 1_000_000)
+        deadline = runtime._clock + remaining
+        while (waiter := self.socket._io_arm_r(remaining)) is not None:
+            if remaining == 0:
+                return False
+            await waiter
+            remaining = max(deadline - runtime._clock, 0)
+        return True
+
+    async def wait_writable(self, timeout: int | float | None = None) -> bool:
+        if timeout is None:
+            while (waiter := self.socket._io_arm_w()) is not None:
+                await waiter
+            return True
+        runtime = get_runtime()
+        remaining = round(max(timeout, 0) * 1_000_000)
+        deadline = runtime._clock + remaining
+        while (waiter := self.socket._io_arm_w(remaining)) is not None:
+            if remaining == 0:
+                return False
+            await waiter
+            remaining = max(deadline - runtime._clock, 0)
+        return True
+
+    def receive_some_nowait(self, max_bytes: int | None = None) -> bytes | type[_Stream.NotReady]:
+        try:
+            return self.socket._sock.recv(max_bytes or 65536)
+        except BlockingIOError:
+            self.socket._io_clear_r()
+            return self.NotReady
+
+    def try_receive_some(self, max_bytes: int | None = None) -> bytes:
+        if (ret := self.receive_some_nowait(max_bytes)) is self.NotReady:
+            raise WouldBlock('Not ready')
+        return ret
 
     def close(self):
         self.socket.close()

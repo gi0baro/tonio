@@ -75,6 +75,87 @@ def test_tls_tcp_recv(run, ssl_ctx_server, ssl_ctx_client):
     assert data == b'a' * _SIZE
 
 
+def test_tls_tcp_recv_nowait(run, ssl_ctx_server, ssl_ctx_client):
+    def server():
+        done = tonio.Event()
+        ready = tonio.Event()
+        res = []
+        port = yield _get_port()
+
+        def _server_handler(stream: TLSStream):
+            blocked = False
+            try:
+                stream.try_receive_some()
+            except tonio.exceptions.WouldBlock:
+                blocked = True
+            ready.set()
+            buf = b''
+            while len(buf) < _SIZE:
+                while (data := stream.receive_some_nowait()) is stream.NotReady:
+                    yield stream.wait_readable()
+                buf += data
+            res.append((blocked, buf))
+            done.set()
+
+        with tonio.scope() as scope:
+            scope.spawn(serve_tls_over_tcp(_server_handler, host='127.0.0.1', port=port, ssl_context=ssl_ctx_server))
+            scope.spawn(client(port, ready))
+            yield done.wait()
+            scope.cancel()
+        yield scope()
+
+        return res[0]
+
+    def client(port, ready):
+        yield tonio.sleep(0.5)
+        stream: TLSStream = yield open_tls_over_tcp_stream('127.0.0.1', port=port, ssl_context=ssl_ctx_client)
+        yield ready.wait()
+        yield stream.wait_writable()
+        yield stream.send_all(b'a' * _SIZE)
+
+    blocked, data = run(server())
+    assert blocked
+    assert data == b'a' * _SIZE
+
+
+def test_tls_tcp_wait_readable_timeout(run, ssl_ctx_server, ssl_ctx_client):
+    def server():
+        done = tonio.Event()
+        ready = tonio.Event()
+        res = []
+        port = yield _get_port()
+
+        def _server_handler(stream: TLSStream):
+            drained = stream.receive_some_nowait() is stream.NotReady
+            readable = yield stream.wait_readable(0.1)
+            ready.set()
+            buf = b''
+            while len(buf) < _SIZE:
+                buf += yield stream.receive_some()
+            res.append((drained, readable, buf))
+            done.set()
+
+        with tonio.scope() as scope:
+            scope.spawn(serve_tls_over_tcp(_server_handler, host='127.0.0.1', port=port, ssl_context=ssl_ctx_server))
+            scope.spawn(client(port, ready))
+            yield done.wait()
+            scope.cancel()
+        yield scope()
+
+        return res[0]
+
+    def client(port, ready):
+        yield tonio.sleep(0.5)
+        stream: TLSStream = yield open_tls_over_tcp_stream('127.0.0.1', port=port, ssl_context=ssl_ctx_client)
+        yield ready.wait()
+        yield stream.send_all(b'a' * _SIZE)
+
+    drained, readable, data = run(server())
+    assert drained
+    assert not readable
+    assert data == b'a' * _SIZE
+
+
 def test_tls_tcp_send(run, ssl_ctx_server, ssl_ctx_client):
     done = tonio.Event()
     state = {'data': b''}
