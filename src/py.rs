@@ -3,6 +3,7 @@ use pyo3::{prelude::*, sync::PyOnceLock};
 // static SOCKET: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 #[cfg(unix)]
 static OS: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+#[cfg(Py_GIL_DISABLED)]
 static SYS: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 static THREADING: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 
@@ -17,6 +18,7 @@ fn os(py: Python<'_>) -> PyResult<&Bound<'_, PyAny>> {
     Ok(OS.get_or_try_init(py, || py.import("os").map(Into::into))?.bind(py))
 }
 
+#[cfg(Py_GIL_DISABLED)]
 fn sys(py: Python<'_>) -> PyResult<&Bound<'_, PyAny>> {
     Ok(SYS.get_or_try_init(py, || py.import("sys").map(Into::into))?.bind(py))
 }
@@ -45,6 +47,7 @@ pub(crate) fn os_set_blocking(py: Python, fd: i32, val: bool) -> PyResult<()> {
         .map(|_| ())
 }
 
+#[cfg(Py_GIL_DISABLED)]
 pub(crate) fn sys_gil(py: Python) -> PyResult<bool> {
     sys(py)?
         .call_method0(pyo3::intern!(py, "_is_gil_enabled"))?

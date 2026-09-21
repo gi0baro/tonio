@@ -46,27 +46,31 @@ pub(crate) fn get_runtime(py: Python<'_>) -> PyResult<&Py<runtime::Runtime>> {
         .ok_or_else(|| errors::RuntimeNotInitializedError::new_err(()))
 }
 
+#[cfg(Py_GIL_DISABLED)]
 #[pyfunction]
 fn set_runtime(py: Python<'_>, runtime: Py<runtime::Runtime>) -> PyResult<()> {
-    #[cfg(Py_GIL_DISABLED)]
-    {
-        if crate::py::sys_gil(py)? {
-            return Err(pyo3::exceptions::PyRuntimeError::new_err("GIL detected"));
-        }
+    if crate::py::sys_gil(py)? {
+        return Err(pyo3::exceptions::PyRuntimeError::new_err("GIL detected"));
+    }
 
-        //: "immortalize" the runtime obj so that cross-thread incref/decrefs short-circuit
-        //  (no atomic RMW on a single shared cache line). Mirrors CPython's `_Py_SetImmortal`.
-        unsafe {
-            let op = runtime.as_ptr();
-            (*op).ob_tid = 0;
-            (*op).ob_ref_local.store(u32::MAX, std::sync::atomic::Ordering::Relaxed);
-            (*op).ob_ref_shared.store(0, std::sync::atomic::Ordering::Relaxed);
-        }
+    //: "immortalize" the runtime obj so that cross-thread incref/decrefs short-circuit
+    //  (no atomic RMW on a single shared cache line). Mirrors CPython's `_Py_SetImmortal`.
+    unsafe {
+        let op = runtime.as_ptr();
+        (*op).ob_tid = 0;
+        (*op).ob_ref_local.store(u32::MAX, std::sync::atomic::Ordering::Relaxed);
+        (*op).ob_ref_shared.store(0, std::sync::atomic::Ordering::Relaxed);
     }
 
     RUNTIME
         .set(py, runtime)
         .map_err(|_| errors::RuntimeAlreadyInitializedError::new_err(()))
+}
+
+#[cfg(not(Py_GIL_DISABLED))]
+#[pyfunction]
+fn set_runtime(_py: Python<'_>, _runtime: Py<runtime::Runtime>) -> PyResult<()> {
+    Err(pyo3::exceptions::PyRuntimeError::new_err("GIL detected"))
 }
 
 #[pymodule(gil_used = false)]
