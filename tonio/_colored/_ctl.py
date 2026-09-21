@@ -51,7 +51,7 @@ class _Spawn:
     __slots__ = []
 
     @staticmethod
-    def __call__(*coros) -> Awaitable[Any]:
+    def __call__(*coros: Awaitable[Any]) -> Awaitable[Any]:
         barrier = Barrier(len(coros) + 1)
         res = Result(len(coros))
         errs = []
@@ -71,7 +71,7 @@ class _Spawn:
         return _SpawnJoinCollect(barrier, res, errs)
 
     @staticmethod
-    def without_results(*coros) -> Awaitable[None]:
+    def without_results(*coros: Awaitable[Any]) -> Awaitable[None]:
         barrier = Barrier(len(coros) + 1)
         errs = []
 
@@ -89,7 +89,7 @@ class _Spawn:
         return _SpawnJoin(barrier, errs)
 
     @staticmethod
-    def without_tracking(*coros):
+    def without_tracking(*coros: Awaitable[Any]):
         for coro in coros:
             get_runtime()._spawn_pyasyncgen(coro)
 
@@ -97,7 +97,7 @@ class _Spawn:
 spawn = _Spawn()
 
 
-async def select(*coros) -> Any:
+async def select(*coros: Awaitable[Any]) -> Any:
     scope = Scope()
     sentinel = Event()
     res = Result()
@@ -137,7 +137,7 @@ async def spawn_blocking(fn: Callable[_Params, _Return], /, *args: _Params.args,
     return val
 
 
-def block_on(coro):
+def block_on(coro: Awaitable[_T]) -> _T:
     ev = threading.Event()
     res = Result()
 
@@ -174,7 +174,7 @@ async def map_blocking(fn: Callable[[_T], _Return], /, xs: Iterable[_T]) -> list
     return ret
 
 
-async def as_completed(*coros):
+async def as_completed(*coros: Awaitable[Any]):
     targets = [(Event(), Result()) for _ in range(len(coros))]
     glues = list(reversed(targets))
 

@@ -2,7 +2,7 @@ import contextlib
 import threading
 from typing import Any, Callable, Iterable, ParamSpec, TypeVar
 
-from ._events import Event
+from ._events import Event, Waiter
 from ._scope import Scope
 from ._sync import Barrier
 from ._tonio import CancelledError, Result, get_runtime
@@ -18,7 +18,7 @@ class _Spawn:
     __slots__ = []
 
     @staticmethod
-    def __call__(*coros: Coro) -> Coro[Any]:
+    def __call__(*coros: Coro[Any]) -> Coro[Any]:
         barrier = Barrier(len(coros) + 1)
         res = Result(len(coros))
         errs = []
@@ -44,7 +44,7 @@ class _Spawn:
         return join()
 
     @staticmethod
-    def without_results(*coros: Coro) -> Coro[None]:
+    def without_results(*coros: Coro[Any]) -> Coro[None]:
         barrier = Barrier(len(coros) + 1)
         errs = []
 
@@ -67,7 +67,7 @@ class _Spawn:
         return join()
 
     @staticmethod
-    def without_tracking(*coros: Coro):
+    def without_tracking(*coros: Coro[Any]):
         for coro in coros:
             get_runtime()._spawn_pygen(coro)
 
@@ -75,7 +75,7 @@ class _Spawn:
 spawn = _Spawn()
 
 
-def select(*coros: Coro) -> Coro[Any]:
+def select(*coros: Coro[Any] | Waiter) -> Coro[Any]:
     scope = Scope()
     sentinel = Event()
     res = Result()
@@ -153,7 +153,7 @@ def map_blocking(fn: Callable[[_T], _Return], /, xs: Iterable[_T]) -> Coro[list[
     return ret
 
 
-def as_completed(*coros: Coro):
+def as_completed(*coros: Coro[Any]):
     targets = [(Event(), Result()) for _ in range(len(coros))]
     glues = list(reversed(targets))
 
