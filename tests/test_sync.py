@@ -273,3 +273,53 @@ def test_channel_unbounded(run):
     consumed = {v for c in consumed for v in c}
     assert len(consumed) == 40
     assert consumed == ({*range(100, 110)} | {*range(200, 210)} | {*range(300, 310)} | {*range(400, 410)})
+
+
+def test_channel_nowait():
+    sender, receiver = channel.channel(1)
+    assert sender.Closed is receiver.Closed
+
+    assert receiver.receive_nowait() is receiver.Empty
+    assert sender.send_nowait(1) is None
+    assert sender.send_nowait(2) is sender.Full
+    assert receiver.receive_nowait() == 1
+
+    assert sender.send_nowait(3) is None
+    sender.close()
+    assert sender.send_nowait(4) is sender.Closed
+    assert receiver.receive_nowait() == 3
+    assert receiver.receive_nowait() is receiver.Closed
+
+    sender, receiver = channel.channel(0)
+    assert sender.send_nowait(1) is sender.Full
+
+
+def test_channel_nowait_events():
+    sender, receiver = channel.channel(0)
+    event = sender._send(1)
+    assert event is not None
+    assert not event.is_set()
+    assert receiver.receive_nowait() == 1
+    assert event.is_set()
+
+    sender, receiver = channel.channel(1)
+    event, blocking, _ = receiver._receive()
+    assert blocking
+    assert not event.is_set()
+    assert sender.send_nowait(2) is None
+    assert event.is_set()
+    assert receiver.receive_nowait() == 2
+
+
+def test_channel_unbounded_nowait():
+    sender, receiver = channel.unbounded()
+
+    assert receiver.receive_nowait() is receiver.Empty
+    sender.send(1)
+    assert receiver.receive_nowait() == 1
+    assert receiver.receive_nowait() is receiver.Empty
+
+    sender.send(2)
+    sender.close()
+    assert receiver.receive_nowait() == 2
+    assert receiver.receive_nowait() is receiver.Closed

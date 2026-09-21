@@ -221,6 +221,12 @@ impl SemaphoreCtx {
     }
 }
 
+enum ChannelPullResult {
+    Message(Py<PyAny>),
+    Empty,
+    Closed,
+}
+
 struct ChannelState {
     queue: VecDeque<(Py<PyAny>, Option<Py<Event>>)>,
     waiters: VecDeque<Py<Event>>,
@@ -294,6 +300,28 @@ impl Channel {
     }
 
     #[inline]
+    fn push_noev(&self, py: Python, message: Py<PyAny>) -> bool {
+        if self
+            .len
+            .try_update(atomic::Ordering::Relaxed, atomic::Ordering::Relaxed, |len| {
+                (len < self.size).then_some(len + 1)
+            })
+            .is_err()
+        {
+            return false;
+        }
+        let want_push = {
+            let mut state = self.state.lock().unwrap();
+            state.queue.push_back((message, None));
+            state.waiters.pop_front()
+        };
+        if let Some(event) = want_push {
+            event.get().set(py);
+        }
+        true
+    }
+
+    #[inline]
     fn pull(&self, py: Python) -> (Option<Py<Event>>, Option<Py<PyAny>>) {
         macro_rules! try_pull {
             ($state:ident) => {
@@ -324,6 +352,22 @@ impl Channel {
             state.waiters.push_back(want_push.clone_ref(py));
         }
         (Some(want_push), None)
+    }
+
+    fn pull_noev(&self, py: Python) -> ChannelPullResult {
+        let mut state = self.state.lock().unwrap();
+        if let Some((message, want_pull)) = state.queue.pop_front() {
+            drop(state);
+            self.len.fetch_sub(1, atomic::Ordering::Relaxed);
+            if let Some(event) = want_pull {
+                event.get().set(py);
+            }
+            return ChannelPullResult::Message(message);
+        }
+        if self.closed.load(atomic::Ordering::Acquire) {
+            return ChannelPullResult::Closed;
+        }
+        ChannelPullResult::Empty
     }
 }
 
@@ -402,6 +446,17 @@ impl UnboundedChannel {
             state.waiters.push_back(want_push.clone_ref(py));
         }
         (Some(want_push), None)
+    }
+
+    fn pull_noev(&self) -> ChannelPullResult {
+        let mut state = self.state.lock().unwrap();
+        if let Some(message) = state.queue.pop_front() {
+            return ChannelPullResult::Message(message);
+        }
+        if self.closed.load(atomic::Ordering::Acquire) {
+            return ChannelPullResult::Closed;
+        }
+        ChannelPullResult::Empty
     }
 
     fn close(&self, py: Python) {
@@ -483,6 +538,18 @@ impl ChannelSender {
         Self { channel: inner.clone() }
     }
 
+    #[classattr]
+    #[pyo3(name = "Closed")]
+    fn _res_closed(py: Python<'_>) -> Bound<'_, pyo3::types::PyType> {
+        py.get_type::<ChannelClosed>()
+    }
+
+    #[classattr]
+    #[pyo3(name = "Full")]
+    fn _res_full(py: Python<'_>) -> Bound<'_, pyo3::types::PyType> {
+        py.get_type::<ChannelFull>()
+    }
+
     // TODO: clone
 
     fn close(&self, py: Python) {
@@ -494,6 +561,26 @@ impl ChannelSender {
             return Err(pyo3::exceptions::PyBrokenPipeError::new_err("channel closed"));
         }
         Ok(self.channel.push(py, message))
+    }
+
+    fn send_nowait<'p>(&self, py: Python<'p>, message: Py<PyAny>) -> Option<Bound<'p, pyo3::types::PyType>> {
+        if self.channel.closed.load(atomic::Ordering::Acquire) {
+            return Some(py.get_type::<ChannelClosed>());
+        }
+        if !self.channel.push_noev(py, message) {
+            return Some(py.get_type::<ChannelFull>());
+        }
+        None
+    }
+
+    fn try_send(&self, py: Python, message: Py<PyAny>) -> PyResult<()> {
+        if self.channel.closed.load(atomic::Ordering::Acquire) {
+            return Err(pyo3::exceptions::PyBrokenPipeError::new_err("channel closed"));
+        }
+        if !self.channel.push_noev(py, message) {
+            return Err(crate::errors::WouldBlock::new_err("channel full"));
+        }
+        Ok(())
     }
 }
 
@@ -517,6 +604,18 @@ impl ChannelReceiver {
         Self { channel: inner.clone() }
     }
 
+    #[classattr]
+    #[pyo3(name = "Closed")]
+    fn _res_closed(py: Python<'_>) -> Bound<'_, pyo3::types::PyType> {
+        py.get_type::<ChannelClosed>()
+    }
+
+    #[classattr]
+    #[pyo3(name = "Empty")]
+    fn _res_empty(py: Python<'_>) -> Bound<'_, pyo3::types::PyType> {
+        py.get_type::<ChannelEmpty>()
+    }
+
     // TODO: clone
 
     fn _receive(&self, py: Python) -> PyResult<(Option<Py<Event>>, bool, Option<Py<PyAny>>)> {
@@ -524,6 +623,22 @@ impl ChannelReceiver {
             (event @ Some(_), None) => Ok((event, true, None)),
             (None, message @ Some(_)) => Ok((None, false, message)),
             _ => Err(pyo3::exceptions::PyBrokenPipeError::new_err("channel closed")),
+        }
+    }
+
+    fn receive_nowait(&self, py: Python) -> Py<PyAny> {
+        match self.channel.pull_noev(py) {
+            ChannelPullResult::Message(message) => message,
+            ChannelPullResult::Closed => py.get_type::<ChannelClosed>().into_any().unbind(),
+            ChannelPullResult::Empty => py.get_type::<ChannelEmpty>().into_any().unbind(),
+        }
+    }
+
+    fn try_receive(&self, py: Python) -> PyResult<Py<PyAny>> {
+        match self.channel.pull_noev(py) {
+            ChannelPullResult::Message(message) => Ok(message),
+            ChannelPullResult::Closed => Err(pyo3::exceptions::PyBrokenPipeError::new_err("channel closed")),
+            ChannelPullResult::Empty => Err(crate::errors::WouldBlock::new_err("channel empty")),
         }
     }
 }
@@ -583,6 +698,18 @@ impl UnboundedChannelReceiver {
         Self { channel: inner.clone() }
     }
 
+    #[classattr]
+    #[pyo3(name = "Closed")]
+    fn _res_closed(py: Python<'_>) -> Bound<'_, pyo3::types::PyType> {
+        py.get_type::<ChannelClosed>()
+    }
+
+    #[classattr]
+    #[pyo3(name = "Empty")]
+    fn _res_empty(py: Python<'_>) -> Bound<'_, pyo3::types::PyType> {
+        py.get_type::<ChannelEmpty>()
+    }
+
     // TODO: clone
 
     fn _receive(&self, py: Python) -> PyResult<(Option<Py<Event>>, bool, Option<Py<PyAny>>)> {
@@ -592,6 +719,22 @@ impl UnboundedChannelReceiver {
             _ => Err(pyo3::exceptions::PyBrokenPipeError::new_err("channel closed")),
         }
     }
+
+    fn receive_nowait(&self, py: Python) -> Py<PyAny> {
+        match self.channel.pull_noev() {
+            ChannelPullResult::Message(message) => message,
+            ChannelPullResult::Closed => py.get_type::<ChannelClosed>().into_any().unbind(),
+            ChannelPullResult::Empty => py.get_type::<ChannelEmpty>().into_any().unbind(),
+        }
+    }
+
+    fn try_receive(&self) -> PyResult<Py<PyAny>> {
+        match self.channel.pull_noev() {
+            ChannelPullResult::Message(message) => Ok(message),
+            ChannelPullResult::Closed => Err(pyo3::exceptions::PyBrokenPipeError::new_err("channel closed")),
+            ChannelPullResult::Empty => Err(crate::errors::WouldBlock::new_err("channel empty")),
+        }
+    }
 }
 
 impl Drop for UnboundedChannelReceiver {
@@ -599,6 +742,13 @@ impl Drop for UnboundedChannelReceiver {
         Python::attach(|py| self.channel.rx_rem(py));
     }
 }
+
+#[pyclass(frozen, module = "tonio._tonio")]
+struct ChannelClosed;
+#[pyclass(frozen, module = "tonio._tonio")]
+struct ChannelEmpty;
+#[pyclass(frozen, module = "tonio._tonio")]
+struct ChannelFull;
 
 pub(crate) fn init_pymodule(module: &Bound<PyModule>) -> PyResult<()> {
     module.add_class::<Lock>()?;
@@ -612,6 +762,9 @@ pub(crate) fn init_pymodule(module: &Bound<PyModule>) -> PyResult<()> {
     module.add_class::<PyUnboundedChannel>()?;
     module.add_class::<UnboundedChannelSender>()?;
     module.add_class::<UnboundedChannelReceiver>()?;
+    module.add_class::<ChannelClosed>()?;
+    module.add_class::<ChannelEmpty>()?;
+    module.add_class::<ChannelFull>()?;
 
     Ok(())
 }
