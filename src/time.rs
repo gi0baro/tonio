@@ -50,3 +50,8 @@ impl Handle for Timer {
         self.target.resume(py, runtime.get(), py.None(), 0);
     }
 }
+
+#[inline]
+pub(crate) fn secs_to_micros(secs: f64) -> usize {
+    (secs.max(0.0) * 1_000_000.0).round() as usize
+}

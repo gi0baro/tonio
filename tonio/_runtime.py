@@ -88,7 +88,7 @@ class Runtime(_Runtime):
                 done.set()
 
         def watcher():
-            yield from done.wait()
+            yield done.waiter(None)
             self.stop()
 
         self._spawn_pygen(watcher())
@@ -117,7 +117,7 @@ class Runtime(_Runtime):
                 done.set()
 
         async def watcher():
-            await done.wait()
+            await done.waiter(None)
             self.stop()
 
         self._spawn_pyasyncgen(watcher())

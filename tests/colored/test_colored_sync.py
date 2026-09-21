@@ -42,7 +42,7 @@ def test_semaphore_cancel_acquire(run):
 
         async def holder():
             async with sem:
-                await release_ev.waiter(None)
+                await release_ev.wait()
 
         async def doomed():
             async with sem:
@@ -102,7 +102,7 @@ def test_lock_cancel_acquire(run):
 
         async def holder():
             async with lock:
-                await release_ev.waiter(None)
+                await release_ev.wait()
 
         async def doomed():
             async with lock:

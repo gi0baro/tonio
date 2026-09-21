@@ -44,7 +44,7 @@ def test_semaphore_cancel_acquire(run):
 
         def holder():
             with (yield sem()):
-                yield release_ev.waiter(None)
+                yield release_ev.wait()
 
         def doomed():
             with (yield sem()):
@@ -105,7 +105,7 @@ def test_lock_cancel_acquire(run):
 
         def holder():
             with (yield lock()):
-                yield release_ev.waiter(None)
+                yield release_ev.wait()
 
         def doomed():
             with (yield lock()):

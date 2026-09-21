@@ -4,7 +4,7 @@ use mio::Interest;
 use pyo3::prelude::*;
 
 use super::{RawFd, schedule::ScheduledIO};
-use crate::events::Waiter;
+use crate::{events::Waiter, time::secs_to_micros};
 
 //: raw-fd registration handle for consumers that perform their own I/O
 #[pyclass(frozen, subclass, name = "ScheduledIO", module = "tonio._tonio")]
@@ -22,13 +22,13 @@ impl PyScheduledIO {
     }
 
     #[pyo3(signature = (timeout=None))]
-    fn _arm_r(&self, py: Python, timeout: Option<usize>) -> PyResult<Option<Py<Waiter>>> {
-        self.io.arm_r(py, timeout)
+    fn arm_r(&self, py: Python, timeout: Option<f64>) -> PyResult<Option<Py<Waiter>>> {
+        self.io.arm_r(py, timeout.map(secs_to_micros))
     }
 
     #[pyo3(signature = (timeout=None))]
-    fn _arm_w(&self, py: Python, timeout: Option<usize>) -> PyResult<Option<Py<Waiter>>> {
-        self.io.arm_w(py, timeout)
+    fn arm_w(&self, py: Python, timeout: Option<f64>) -> PyResult<Option<Py<Waiter>>> {
+        self.io.arm_w(py, timeout.map(secs_to_micros))
     }
 
     fn clear_r(&self) {

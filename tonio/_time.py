@@ -39,7 +39,7 @@ def time() -> float:
 
 
 def sleep(timeout: int | float) -> Coro[None]:
-    yield from Event().wait(timeout)
+    yield Event().wait(timeout)
 
 
 def timeout(coro: Coro[_T], timeout: int | float) -> Coro[tuple[None | _T, bool]]:
@@ -63,7 +63,7 @@ def timeout(coro: Coro[_T], timeout: int | float) -> Coro[tuple[None | _T, bool]
             done.set()
 
     get_runtime()._spawn_pygen(wrapper())
-    yield from done.wait(timeout)
+    yield done.wait(timeout)
 
     if not done.is_set():
         checkpoint.unwind()

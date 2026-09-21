@@ -8,7 +8,7 @@ use crate::{
     errors::abort,
     handles::{self, BoxedHandle, Handle},
     runtime::Runtime,
-    time::Timer,
+    time::{Timer, secs_to_micros},
 };
 
 #[pyclass(frozen, subclass, module = "tonio._tonio")]
@@ -97,7 +97,15 @@ impl Event {
         self.flag.load(atomic::Ordering::Acquire)
     }
 
-    // TODO: timeout resolution should be micros!
+    #[pyo3(signature = (timeout = None))]
+    fn wait(pyself: Py<Self>, py: Python, timeout: Option<f64>) -> Py<Waiter> {
+        let rself = pyself.get();
+        if rself.dirty.load(atomic::Ordering::Relaxed) {
+            rself.rem_stale_wakers();
+        }
+        Waiter::from_event(py, pyself, timeout.map(secs_to_micros))
+    }
+
     fn waiter(pyself: Py<Self>, py: Python, timeout: Option<usize>) -> Py<Waiter> {
         let rself = pyself.get();
         if rself.dirty.load(atomic::Ordering::Relaxed) {
