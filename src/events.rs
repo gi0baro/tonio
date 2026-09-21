@@ -122,6 +122,12 @@ impl Handle for Py<Event> {
     }
 }
 
+#[derive(PartialEq)]
+enum WaiterWakeMode {
+    All,
+    Any,
+}
+
 // TODO: split into gen-asyngen classes (needs two different `waiter` build methods in `Event`)
 #[pyclass(frozen, module = "tonio._tonio")]
 pub(crate) struct Waiter {
@@ -129,6 +135,7 @@ pub(crate) struct Waiter {
     aborted: Arc<atomic::AtomicBool>,
     events: Vec<Py<Event>>,
     timeout: Option<usize>,
+    wake_on: WaiterWakeMode,
     checkpoint_gen: arc_swap::ArcSwapOption<PyGenSuspension>,
     checkpoint_asyncgen: arc_swap::ArcSwapOption<PyAsyncGenSuspension>,
 }
@@ -140,6 +147,7 @@ impl Waiter {
             aborted: Arc::new(false.into()),
             events: vec![event],
             timeout,
+            wake_on: WaiterWakeMode::All,
             checkpoint_gen: None.into(),
             checkpoint_asyncgen: None.into(),
         };
@@ -152,15 +160,17 @@ impl Waiter {
             aborted: Arc::new(false.into()),
             events: vec![],
             timeout: None,
+            wake_on: WaiterWakeMode::All,
             checkpoint_gen: None.into(),
             checkpoint_asyncgen: None.into(),
         }
     }
 
     fn build_sentinel(&self, py: Python) -> Option<Sentinel> {
-        match self.events.len() {
-            0..=1 => None,
-            v => Some(Sentinel::new(py, v)),
+        match (self.events.len(), &self.wake_on) {
+            (0..=1, _) => None,
+            (v, WaiterWakeMode::All) => Some(Sentinel::new(py, v)),
+            (_, WaiterWakeMode::Any) => None,
         }
     }
 
@@ -325,18 +335,38 @@ impl Waiter {
     pub(crate) fn clear_asyngensuspension(&self) {
         self.checkpoint_asyncgen.store(None);
     }
+
+    #[inline(always)]
+    fn wake_on_conflict(&self, mode: WaiterWakeMode) -> bool {
+        self.events.len() > 1 && self.wake_on != mode
+    }
 }
 
 #[pymethods]
 impl Waiter {
     #[new]
-    #[pyo3(signature = (*events))]
-    pub fn new(events: Vec<Py<Event>>) -> Self {
+    #[pyo3(signature = (*events, timeout = None))]
+    pub fn new(events: Vec<Py<Event>>, timeout: Option<usize>) -> Self {
         Self {
             registered: false.into(),
             aborted: Arc::new(false.into()),
             events,
-            timeout: None,
+            timeout,
+            wake_on: WaiterWakeMode::All,
+            checkpoint_gen: None.into(),
+            checkpoint_asyncgen: None.into(),
+        }
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (*events, timeout = None))]
+    fn any(events: Vec<Py<Event>>, timeout: Option<usize>) -> Self {
+        Self {
+            registered: false.into(),
+            aborted: Arc::new(false.into()),
+            events,
+            timeout,
+            wake_on: WaiterWakeMode::Any,
             checkpoint_gen: None.into(),
             checkpoint_asyncgen: None.into(),
         }
@@ -373,6 +403,64 @@ impl Waiter {
     pub(crate) fn throw(&self, value: Bound<PyAny>) -> PyResult<()> {
         let err = PyErr::from_value(value);
         Err(err)
+    }
+
+    fn __and__(pyself: Py<Self>, other: &Bound<'_, Waiter>) -> PyResult<Py<Waiter>> {
+        let py = other.py();
+        let rself = pyself.get();
+        let other = other.get();
+        if std::ptr::eq(rself, other) {
+            return Ok(pyself);
+        }
+        if rself.registered.load(atomic::Ordering::Relaxed) || other.registered.load(atomic::Ordering::Relaxed) {
+            return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                "cannot merge consumed waiters",
+            ));
+        }
+        if rself.wake_on_conflict(WaiterWakeMode::All) || other.wake_on_conflict(WaiterWakeMode::All) {
+            return Err(pyo3::exceptions::PyNotImplementedError::new_err(
+                "cannot merge AND with OR",
+            ));
+        }
+        let timeout = match (rself.timeout, other.timeout) {
+            (t @ Some(_), None) => t,
+            (None, t @ Some(_)) => t,
+            (Some(t1), Some(t2)) => Some(t1.max(t2)),
+            _ => None,
+        };
+        let mut events = Vec::new();
+        events.extend(rself.events.iter().map(|v| v.clone_ref(py)));
+        events.extend(other.events.iter().map(|v| v.clone_ref(py)));
+        Py::new(py, Waiter::new(events, timeout))
+    }
+
+    fn __or__(pyself: Py<Self>, other: &Bound<'_, Waiter>) -> PyResult<Py<Waiter>> {
+        let py = other.py();
+        let rself = pyself.get();
+        let other = other.get();
+        if std::ptr::eq(rself, other) {
+            return Ok(pyself);
+        }
+        if rself.registered.load(atomic::Ordering::Relaxed) || other.registered.load(atomic::Ordering::Relaxed) {
+            return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                "cannot merge consumed waiters",
+            ));
+        }
+        if rself.wake_on_conflict(WaiterWakeMode::Any) || other.wake_on_conflict(WaiterWakeMode::Any) {
+            return Err(pyo3::exceptions::PyNotImplementedError::new_err(
+                "cannot merge AND with OR",
+            ));
+        }
+        let timeout = match (rself.timeout, other.timeout) {
+            (t @ Some(_), None) => t,
+            (None, t @ Some(_)) => t,
+            (Some(t1), Some(t2)) => Some(t1.min(t2)),
+            _ => None,
+        };
+        let mut events = Vec::new();
+        events.extend(rself.events.iter().map(|v| v.clone_ref(py)));
+        events.extend(other.events.iter().map(|v| v.clone_ref(py)));
+        Py::new(py, Waiter::any(events, timeout))
     }
 }
 
@@ -478,6 +566,13 @@ impl Suspension {
         match self {
             Self::Gen(inner) => inner.resume(py, runtime, value, order),
             Self::AsyncGen(inner) => inner.resume(py, runtime, value, order),
+        }
+    }
+
+    pub(crate) fn skip(&self, py: Python, runtime: &Runtime) {
+        match self {
+            Self::Gen(inner) => inner.skip(py, runtime),
+            Self::AsyncGen(inner) => inner.skip(py, runtime),
         }
     }
 
@@ -662,6 +757,7 @@ impl PyGenSuspension {
     pub fn resume(&self, py: Python, runtime: &Runtime, value: Py<PyAny>, order: usize) {
         if let Some(sentinel) = &self.sentinel {
             if let Some(composed_value) = sentinel.decrement(py, (order, value)) {
+                self.consumed.store(true, atomic::Ordering::Relaxed);
                 runtime.add_handle(self.to_handle(py, composed_value));
             }
             return;
@@ -675,9 +771,27 @@ impl PyGenSuspension {
         }
     }
 
+    pub fn skip(&self, py: Python, runtime: &Runtime) {
+        if let Some(sentinel) = &self.sentinel {
+            if sentinel.consume() {
+                self.consumed.store(true, atomic::Ordering::Relaxed);
+                runtime.add_handle(self.to_handle(py, py.None()));
+            }
+            return;
+        }
+        if self
+            .consumed
+            .compare_exchange(false, true, atomic::Ordering::Relaxed, atomic::Ordering::Relaxed)
+            .is_ok()
+        {
+            runtime.add_handle(self.to_handle(py, py.None()));
+        }
+    }
+
     pub fn error(&self, py: Python, runtime: &Runtime, value: PyErr) {
         if let Some(sentinel) = &self.sentinel {
             if sentinel.consume() {
+                self.consumed.store(true, atomic::Ordering::Relaxed);
                 runtime.add_handle(self.to_throw_handle(py, value));
             }
             return;
@@ -690,14 +804,6 @@ impl PyGenSuspension {
             runtime.add_handle(self.to_throw_handle(py, value));
         }
     }
-
-    // for timeouts
-    // fn skip(&self, py: Python, runtime: &Runtime) {
-    //     // TODO: add some state checks to avoid `resume` being called after this?
-    //     if self.consumed.compare_exchange(false, true, atomic::Ordering::Release, atomic::Ordering::Relaxed).is_ok() {
-    //         runtime.add_handle(self.to_handle(py, py.None()));
-    //     }
-    // }
 }
 
 #[derive(Debug)]
@@ -786,6 +892,7 @@ impl PyAsyncGenSuspension {
         }
         if let Some(sentinel) = &self.sentinel {
             if let Some(composed_value) = sentinel.decrement(py, (order, value)) {
+                self.consumed.store(true, atomic::Ordering::Relaxed);
                 runtime.add_handle(self.to_handle(py, composed_value));
             }
             return;
@@ -799,9 +906,30 @@ impl PyAsyncGenSuspension {
         }
     }
 
+    pub fn skip(&self, py: Python, runtime: &Runtime) {
+        if self.aborted.load(atomic::Ordering::Acquire) {
+            return;
+        }
+        if let Some(sentinel) = &self.sentinel {
+            if sentinel.consume() {
+                self.consumed.store(true, atomic::Ordering::Relaxed);
+                runtime.add_handle(self.to_handle(py, py.None()));
+            }
+            return;
+        }
+        if self
+            .consumed
+            .compare_exchange(false, true, atomic::Ordering::Relaxed, atomic::Ordering::Relaxed)
+            .is_ok()
+        {
+            runtime.add_handle(self.to_handle(py, py.None()));
+        }
+    }
+
     pub fn error(&self, py: Python, runtime: &Runtime, value: PyErr) {
         if let Some(sentinel) = &self.sentinel {
             if sentinel.consume() {
+                self.consumed.store(true, atomic::Ordering::Relaxed);
                 runtime.add_handle(self.to_throw_handle(py, value));
             }
             return;

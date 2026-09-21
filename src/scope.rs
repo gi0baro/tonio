@@ -72,7 +72,7 @@ impl PyGenScope {
             }
             events.push(event);
         }
-        let waiter = Py::new(py, Waiter::new(events)).unwrap();
+        let waiter = Py::new(py, Waiter::new(events, None)).unwrap();
         *guard = Some(waiter.clone_ref(py));
         Ok(waiter)
     }
@@ -153,7 +153,7 @@ impl PyAsyncGenScope {
             }
             events.push(event);
         }
-        let waiter = Py::new(py, Waiter::new(events)).unwrap();
+        let waiter = Py::new(py, Waiter::new(events, None)).unwrap();
         *guard = Some(waiter.clone_ref(py));
         Ok(waiter)
     }
