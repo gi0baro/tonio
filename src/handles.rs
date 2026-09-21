@@ -81,7 +81,7 @@ impl PyGenHandle {
                     let err = pyo3::PyErr::fetch(py);
                     if let Some((suspension, _idx)) = &self.parent {
                         suspension.error(py, runtime.get(), err);
-                    } else {
+                    } else if cfg!(debug_assertions) {
                         println!("UNHANDLED PYGEN_ERROR {:?}", self.coro.bind(py));
                         err.display(py);
                     }
@@ -172,7 +172,7 @@ impl PyGenCtxHandle {
                     let err = pyo3::PyErr::fetch(py);
                     if let Some((suspension, _idx)) = &self.parent {
                         suspension.error(py, runtime.get(), err);
-                    } else {
+                    } else if cfg!(debug_assertions) {
                         println!("UNHANDLED PYGEN_ERROR {:?}", self.coro.bind(py));
                         err.display(py);
                     }
@@ -239,9 +239,13 @@ impl PyAsyncGenHandle {
                 pyo3::ffi::PySendResult::PYGEN_ERROR => {
                     self.clear_checkpoint();
 
+                    #[allow(unused_variables)]
                     let err = pyo3::PyErr::fetch(py);
-                    println!("UNHANDLED PYASYNCGEN_ERROR {:?}", self.coro.bind(py));
-                    err.display(py);
+                    #[cfg(debug_assertions)]
+                    {
+                        println!("UNHANDLED PYASYNCGEN_ERROR {:?}", self.coro.bind(py));
+                        err.display(py);
+                    }
                 }
                 pyo3::ffi::PySendResult::PYGEN_RETURN => {
                     self.clear_checkpoint();
@@ -314,9 +318,13 @@ impl PyAsyncGenCtxHandle {
                 pyo3::ffi::PySendResult::PYGEN_ERROR => {
                     self.clear_checkpoint();
 
+                    #[allow(unused_variables)]
                     let err = pyo3::PyErr::fetch(py);
-                    println!("UNHANDLED PYASYNCGEN_ERROR {:?}", self.coro.bind(py));
-                    err.display(py);
+                    #[cfg(debug_assertions)]
+                    {
+                        println!("UNHANDLED PYASYNCGEN_ERROR {:?}", self.coro.bind(py));
+                        err.display(py);
+                    }
                 }
                 pyo3::ffi::PySendResult::PYGEN_RETURN => {
                     self.clear_checkpoint();
@@ -390,7 +398,7 @@ impl Handle for PyGenThrower {
                 Err(err) => {
                     if let Some((suspension, _idx)) = &self.parent {
                         suspension.error(py, runtime.get(), err);
-                    } else {
+                    } else if cfg!(debug_assertions) {
                         println!("UNHANDLED PYGEN THROW {:?}", self.coro.bind(py));
                         err.print(py);
                     }
@@ -470,7 +478,7 @@ impl Handle for PyGenCtxThrower {
                 Err(err) => {
                     if let Some((suspension, _idx)) = &self.parent {
                         suspension.error(py, runtime.get(), err);
-                    } else {
+                    } else if cfg!(debug_assertions) {
                         println!("UNHANDLED PYGEN THROW {:?}", self.coro.bind(py));
                         err.print(py);
                     }
@@ -495,6 +503,7 @@ impl Handle for PyAsyncGenThrower {
             let res = Bound::from_owned_ptr_or_err(py, ret);
             if let Err(err) = res
                 && !err.is_instance_of::<pyo3::exceptions::PyStopIteration>(py)
+                && cfg!(debug_assertions)
             {
                 println!("UNHANDLED PYASYNCGEN THROW {:?}", self.coro.bind(py));
                 err.print(py);
@@ -527,6 +536,7 @@ impl Handle for PyAsyncGenCtxThrower {
             let res = Bound::from_owned_ptr_or_err(py, ret);
             if let Err(err) = res
                 && !err.is_instance_of::<pyo3::exceptions::PyStopIteration>(py)
+                && cfg!(debug_assertions)
             {
                 println!("UNHANDLED PYASYNCGEN THROW {:?}", self.coro.bind(py));
                 err.print(py);
