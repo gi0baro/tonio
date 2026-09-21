@@ -7,15 +7,7 @@ import tempfile
 import pytest
 
 import tonio
-from tonio.net import (
-    SocketStream,
-    open_tcp_stream,
-    open_unix_listener,
-    open_unix_socket,
-    serve_tcp,
-    serve_unix,
-    socket,
-)
+from tonio import net
 
 
 _SIZE = 1024 * 1024
@@ -29,7 +21,7 @@ def _sock_path(name='s'):
 
 
 def _get_port():
-    sock = socket.socket()
+    sock = net.socket.socket()
 
     with sock:
         yield sock.bind(('127.0.0.1', 0))
@@ -43,7 +35,7 @@ def test_streams_tcp_recv(run):
         res = []
         port = yield _get_port()
 
-        def _server_handler(stream: SocketStream):
+        def _server_handler(stream: net.SocketStream):
             buf = b''
             while len(buf) < _SIZE:
                 buf += yield stream.receive_some()
@@ -51,7 +43,7 @@ def test_streams_tcp_recv(run):
             done.set()
 
         with tonio.scope() as scope:
-            scope.spawn(serve_tcp(_server_handler, host='127.0.0.1', port=port))
+            scope.spawn(net.serve_tcp(_server_handler, host='127.0.0.1', port=port))
             scope.spawn(client(port))
             yield done.wait()
             scope.cancel()
@@ -61,7 +53,7 @@ def test_streams_tcp_recv(run):
 
     def client(port):
         yield tonio.sleep(0.5)
-        stream: SocketStream = yield open_tcp_stream('127.0.0.1', port=port)
+        stream: net.SocketStream = yield net.open_tcp_stream('127.0.0.1', port=port)
         yield stream.send_all(b'a' * _SIZE)
 
     data = run(server())
@@ -75,12 +67,12 @@ def test_streams_tcp_send(run):
     def server():
         port = yield _get_port()
 
-        def _server_handler(stream: SocketStream):
+        def _server_handler(stream: net.SocketStream):
             yield stream.send_all(b'a' * _SIZE)
             stream.send_eof()
 
         with tonio.scope() as scope:
-            scope.spawn(serve_tcp(_server_handler, host='127.0.0.1', port=port))
+            scope.spawn(net.serve_tcp(_server_handler, host='127.0.0.1', port=port))
             scope.spawn(client(port))
             yield done.wait()
             scope.cancel()
@@ -88,7 +80,7 @@ def test_streams_tcp_send(run):
 
     def client(port):
         yield tonio.sleep(0.5)
-        stream: SocketStream = yield open_tcp_stream('127.0.0.1', port=port)
+        stream: net.SocketStream = yield net.open_tcp_stream('127.0.0.1', port=port)
         while len(state['data']) < _SIZE:
             state['data'] += yield stream.receive_some()
         done.set()
@@ -105,7 +97,7 @@ def test_streams_unix_roundtrip(run):
         done = tonio.Event()
         res = []
 
-        def _server_handler(stream: SocketStream):
+        def _server_handler(stream: net.SocketStream):
             buf = b''
             while len(buf) < _SIZE:
                 buf += yield stream.receive_some()
@@ -113,7 +105,7 @@ def test_streams_unix_roundtrip(run):
             done.set()
 
         with tonio.scope() as scope:
-            scope.spawn(serve_unix(_server_handler, path))
+            scope.spawn(net.serve_unix(_server_handler, path))
             scope.spawn(client())
             yield done.wait()
             scope.cancel()
@@ -123,7 +115,7 @@ def test_streams_unix_roundtrip(run):
 
     def client():
         yield tonio.sleep(0.5)
-        stream: SocketStream = yield open_unix_socket(path)
+        stream: net.SocketStream = yield net.open_unix_socket(path)
         yield stream.send_all(b'a' * _SIZE)
 
     data = run(server())
@@ -136,12 +128,12 @@ def test_streams_unix_listener_accept(run):
     path = _sock_path()
 
     def main():
-        listener = yield open_unix_listener(path)
+        listener = yield net.open_unix_listener(path)
 
         res = []
 
         def client():
-            stream: SocketStream = yield open_unix_socket(path)
+            stream: net.SocketStream = yield net.open_unix_socket(path)
             yield stream.send_all(b'ping')
             stream.close()
 
@@ -165,7 +157,7 @@ def test_streams_unix_mode(run):
     path = _sock_path()
 
     def main():
-        listener = yield open_unix_listener(path, mode=0o600)
+        listener = yield net.open_unix_listener(path, mode=0o600)
         listener.close()
 
     run(main())
@@ -177,10 +169,10 @@ def test_streams_unix_addr_in_use(run):
     path = _sock_path()
 
     def main():
-        listener = yield open_unix_listener(path)
+        listener = yield net.open_unix_listener(path)
         try:
             with pytest.raises(OSError) as exc:
-                yield open_unix_listener(path)
+                yield net.open_unix_listener(path)
             # no automatic unlink: the live listener must survive
             assert exc.value.errno == errno.EADDRINUSE
             assert path in str(exc.value)
@@ -196,7 +188,7 @@ def test_streams_unix_missing_folder(run):
 
     def main():
         with pytest.raises(FileNotFoundError):
-            yield open_unix_listener(path)
+            yield net.open_unix_listener(path)
 
     run(main())
 
@@ -205,6 +197,6 @@ def test_streams_unix_missing_folder(run):
 def test_streams_unix_abstract_mode(run):
     def main():
         with pytest.raises(ValueError, match='abstract namespace'):
-            yield open_unix_listener(b'\0tonio-test', mode=0o600)
+            yield net.open_unix_listener(b'\0tonio-test', mode=0o600)
 
     run(main())
