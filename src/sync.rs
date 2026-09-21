@@ -83,7 +83,6 @@ impl Semaphore {
         let mut state = self.state.lock().unwrap();
         #[allow(clippy::cast_possible_wrap)]
         let value = state.0 as i32 - state.1.len() as i32;
-        // println!("ACQ VAL {:?}", value);
         if value <= 0 {
             let event = Py::new(py, Event::new()).unwrap();
             state.1.push_back(event.clone_ref(py));

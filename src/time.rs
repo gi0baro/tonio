@@ -9,16 +9,6 @@ pub struct Timer {
     pub(crate) target: Suspension,
 }
 
-// impl Timer {
-//     fn new(target: SuspensionData, when: u128) -> Self {
-//         Self {
-//             when,
-//             target,
-//             cancelled: Arc::new(false.into()),
-//         }
-//     }
-// }
-
 impl PartialEq for Timer {
     fn eq(&self, _other: &Self) -> bool {
         false

@@ -536,7 +536,6 @@ impl Runtime {
 
     #[setter(_stopping)]
     fn _set_stopping(&self, val: bool) {
-        // println!("SET STOP");
         self.stopping.store(val, atomic::Ordering::Release);
         self.wake();
     }

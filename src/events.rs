@@ -217,7 +217,6 @@ impl Waiter {
                     suspension.error(py, runtime.get(), abort());
                     return;
                 }
-                // println!("CHECKPOINT WAITER {:?}", suspension.target);
                 suspension.resume(py, runtime.get(), py.None(), 0);
                 return;
             }
@@ -238,7 +237,6 @@ impl Waiter {
                     return;
                 }
             }
-            // println!("WAITER REGISTERED {:?}", suspension.target);
             rself.register(py, runtime, Suspension::Gen(suspension));
         } else {
             panic!("Waiter already registered")
@@ -316,7 +314,6 @@ impl Waiter {
             .is_ok()
             && let Some(checkpoint) = self.checkpoint_asyncgen.load().as_ref()
         {
-            // println!("ABORT ASYNCG {:?}", checkpoint.target);
             checkpoint.error(py, crate::get_runtime(py).unwrap().get(), abort());
         }
     }
@@ -359,7 +356,6 @@ impl Waiter {
     }
 
     fn __await__(pyself: Py<Self>) -> Py<Self> {
-        // println!("Waiter AWAIT {pyself:?}");
         pyself
     }
 
@@ -376,7 +372,6 @@ impl Waiter {
 
     pub(crate) fn throw(&self, value: Bound<PyAny>) -> PyResult<()> {
         let err = PyErr::from_value(value);
-        // println!("WAITER THROW {:?}", err);
         Err(err)
     }
 }
@@ -460,7 +455,6 @@ impl Waker {
     // }
 
     pub fn wake(&self, py: Python) {
-        // println!("waker called {:?}", self.idx);
         self.target.resume(py, self.runtime.get(), py.None(), self.idx);
     }
 
@@ -668,7 +662,6 @@ impl PyGenSuspension {
     pub fn resume(&self, py: Python, runtime: &Runtime, value: Py<PyAny>, order: usize) {
         if let Some(sentinel) = &self.sentinel {
             if let Some(composed_value) = sentinel.decrement(py, (order, value)) {
-                // println!("suspension resume call SENTINEL {:?}", composed_value.bind(py));
                 runtime.add_handle(self.to_handle(py, composed_value));
             }
             return;
@@ -683,7 +676,6 @@ impl PyGenSuspension {
     }
 
     pub fn error(&self, py: Python, runtime: &Runtime, value: PyErr) {
-        // println!("GENSUSP ERR {:?} {:?}", self.target, self.consumed);
         if let Some(sentinel) = &self.sentinel {
             if sentinel.consume() {
                 runtime.add_handle(self.to_throw_handle(py, value));
@@ -808,7 +800,6 @@ impl PyAsyncGenSuspension {
     }
 
     pub fn error(&self, py: Python, runtime: &Runtime, value: PyErr) {
-        // println!("AGENSUSP ERR {:?} {:?}", self.target, self.consumed);
         if let Some(sentinel) = &self.sentinel {
             if sentinel.consume() {
                 runtime.add_handle(self.to_throw_handle(py, value));
