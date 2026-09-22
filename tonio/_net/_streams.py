@@ -5,9 +5,28 @@ import socket as _stdlib_socket
 from contextlib import suppress
 
 from .._streams import _Stream
-from .._tonio import WouldBlock, get_runtime
+from .._tonio import Waiter, WouldBlock, get_runtime
 from .._types import Coro
 from ._socket import _Socket
+
+
+class SocketStreamWatcher:
+    __slots__ = ['_arm']
+
+    def __init__(self, arm):
+        self._arm = arm
+
+    def __enter__(self):
+        return self
+
+    def waiter(self, timeout: int | None = None) -> Waiter | None:
+        return self._arm(timeout)
+
+    def ready(self) -> bool:
+        return self._arm() is None
+
+    def __exit__(self, *args):
+        return
 
 
 class SocketStream(_Stream):
@@ -78,6 +97,18 @@ class SocketStream(_Stream):
             yield waiter
             remaining = max(deadline - runtime._clock, 0)
         return True
+
+    def waiter_readable(self, timeout: int | None = None) -> Waiter | None:
+        return self.socket._io_arm_r(timeout)
+
+    def waiter_writable(self, timeout: int | None = None) -> Waiter | None:
+        return self.socket._io_arm_w(timeout)
+
+    def watch_readable(self) -> SocketStreamWatcher:
+        return SocketStreamWatcher(self.socket._io_arm_r)
+
+    def watch_writable(self) -> SocketStreamWatcher:
+        return SocketStreamWatcher(self.socket._io_arm_w)
 
     def receive_some_nowait(self, max_bytes: int | None = None) -> bytes | type[_Stream.NotReady]:
         try:

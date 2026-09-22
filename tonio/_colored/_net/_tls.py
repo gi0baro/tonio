@@ -10,7 +10,7 @@ import contextlib
 import ssl as _stdlib_ssl
 from typing import Any
 
-from ..._net._tls import _is_eof, _SSLProxy
+from ..._net._tls import TLSStreamWatcher, _is_eof, _SSLProxy
 from ..._tonio import ResourceBroken, TLSStream as _TLSStream, WouldBlock, get_runtime
 from .._sync import Lock
 from ._streams import _Stream
@@ -135,29 +135,52 @@ class TLSStream(_Stream, _TLSStream):
 
     async def wait_readable(self, timeout: int | float | None = None) -> bool:
         self._check_ready()
-        if self._ssl.pending() or self._ssl._ingress_pending:
+        if self._ssl._pending():
             return True
         if timeout is None:
-            async with self._lock_recv:
-                if self._ssl.pending() or self._ssl._ingress_pending:
-                    return True
-                return await self.transport.wait_readable()
+            while True:
+                with self.watch_readable() as watcher:
+                    if (waiter := watcher.waiter()) is None:
+                        return True
+                    await waiter
         runtime = get_runtime()
-        deadline = runtime._clock + round(timeout * 1_000_000)
-        async with self._lock_recv:
-            if self._ssl.pending() or self._ssl._ingress_pending:
-                return True
-            return await self.transport.wait_readable(max(deadline - runtime._clock, 0) / 1_000_000)
+        remaining = round(max(timeout, 0) * 1_000_000)
+        deadline = runtime._clock + remaining
+        while True:
+            with self.watch_readable() as watcher:
+                if (waiter := watcher.waiter(remaining)) is None:
+                    return True
+                if remaining == 0:
+                    return False
+                await waiter
+            remaining = max(deadline - runtime._clock, 0)
 
     async def wait_writable(self, timeout: int | float | None = None) -> bool:
-        self._check_ready()
         if timeout is None:
-            async with self._lock_send:
-                return await self.transport.wait_writable()
+            while True:
+                with self.watch_writable() as watcher:
+                    if (waiter := watcher.waiter()) is None:
+                        return True
+                    await waiter
         runtime = get_runtime()
-        deadline = runtime._clock + round(timeout * 1_000_000)
-        async with self._lock_send:
-            return await self.transport.wait_writable(max(deadline - runtime._clock, 0) / 1_000_000)
+        remaining = round(max(timeout, 0) * 1_000_000)
+        deadline = runtime._clock + remaining
+        while True:
+            with self.watch_writable() as watcher:
+                if (waiter := watcher.waiter(remaining)) is None:
+                    return True
+                if remaining == 0:
+                    return False
+                await waiter
+            remaining = max(deadline - runtime._clock, 0)
+
+    def watch_readable(self) -> TLSStreamWatcher:
+        self._check_ready()
+        return TLSStreamWatcher(self._lock_recv, self._ssl._pending, self.transport.waiter_readable)
+
+    def watch_writable(self) -> TLSStreamWatcher:
+        self._check_ready()
+        return TLSStreamWatcher(self._lock_send, lambda: False, self.transport.waiter_writable)
 
     def receive_some_nowait(self, max_bytes: int | None = None) -> bytes | bytearray | type[_Stream.NotReady]:
         self._check_ready()

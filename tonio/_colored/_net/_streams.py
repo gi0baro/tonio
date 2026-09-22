@@ -5,8 +5,8 @@ from contextlib import suppress
 from types import CoroutineType
 from typing import Any
 
-from ..._net._streams import _ignorable_accept_errnos, _Stream
-from ..._tonio import WouldBlock, get_runtime
+from ..._net._streams import SocketStreamWatcher, _ignorable_accept_errnos, _Stream
+from ..._tonio import Waiter, WouldBlock, get_runtime
 from ._socket import _Socket
 
 
@@ -78,6 +78,18 @@ class SocketStream(_Stream):
             await waiter
             remaining = max(deadline - runtime._clock, 0)
         return True
+
+    def waiter_readable(self, timeout: int | None = None) -> Waiter | None:
+        return self.socket._io_arm_r(timeout)
+
+    def waiter_writable(self, timeout: int | None = None) -> Waiter | None:
+        return self.socket._io_arm_w(timeout)
+
+    def watch_readable(self) -> SocketStreamWatcher:
+        return SocketStreamWatcher(self.socket._io_arm_r)
+
+    def watch_writable(self) -> SocketStreamWatcher:
+        return SocketStreamWatcher(self.socket._io_arm_w)
 
     def receive_some_nowait(self, max_bytes: int | None = None) -> bytes | type[_Stream.NotReady]:
         try:

@@ -60,10 +60,11 @@ def test_streams_tcp_recv(run):
     assert data == b'a' * _SIZE
 
 
-def test_streams_tcp_recv_nowait(run):
+def test_streams_tcp_readiness(run):
     def server():
         done = tonio.Event()
         ready = tonio.Event()
+        go = tonio.Event()
         res = []
         port = yield _get_port()
 
@@ -73,69 +74,40 @@ def test_streams_tcp_recv_nowait(run):
                 stream.try_receive_some()
             except tonio.exceptions.WouldBlock:
                 blocked = True
-            ready.set()
+            timed_out = not (yield stream.wait_readable(0.1))
+            with stream.watch_readable() as watcher:
+                yield watcher.waiter() | ready.waiter(None)
+                event_won = not watcher.ready()
+            go.set()
             buf = b''
             while len(buf) < _SIZE:
                 while (data := stream.receive_some_nowait()) is stream.NotReady:
                     yield stream.wait_readable()
                 buf += data
-            res.append((blocked, buf))
+            res.append((blocked, timed_out, event_won, buf))
             done.set()
 
         with tonio.scope() as scope:
             scope.spawn(net.serve_tcp(_server_handler, host='127.0.0.1', port=port))
-            scope.spawn(client(port, ready))
+            scope.spawn(client(port, ready, go))
             yield done.wait()
             scope.cancel()
         yield scope()
 
         return res[0]
 
-    def client(port, ready):
+    def client(port, ready, go):
         yield tonio.sleep(0.5)
         stream: net.SocketStream = yield net.open_tcp_stream('127.0.0.1', port=port)
-        yield ready.wait()
+        ready.set()
+        yield go.wait()
         yield stream.wait_writable()
         yield stream.send_all(b'a' * _SIZE)
 
-    blocked, data = run(server())
+    blocked, timed_out, event_won, data = run(server())
     assert blocked
-    assert data == b'a' * _SIZE
-
-
-def test_streams_tcp_wait_readable_timeout(run):
-    def server():
-        done = tonio.Event()
-        ready = tonio.Event()
-        res = []
-        port = yield _get_port()
-
-        def _server_handler(stream: net.SocketStream):
-            readable = yield stream.wait_readable(0.1)
-            ready.set()
-            buf = b''
-            while len(buf) < _SIZE:
-                buf += yield stream.receive_some()
-            res.append((readable, buf))
-            done.set()
-
-        with tonio.scope() as scope:
-            scope.spawn(net.serve_tcp(_server_handler, host='127.0.0.1', port=port))
-            scope.spawn(client(port, ready))
-            yield done.wait()
-            scope.cancel()
-        yield scope()
-
-        return res[0]
-
-    def client(port, ready):
-        yield tonio.sleep(0.5)
-        stream: net.SocketStream = yield net.open_tcp_stream('127.0.0.1', port=port)
-        yield ready.wait()
-        yield stream.send_all(b'a' * _SIZE)
-
-    readable, data = run(server())
-    assert not readable
+    assert timed_out
+    assert event_won
     assert data == b'a' * _SIZE
 
 
