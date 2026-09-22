@@ -14,7 +14,6 @@ from typing import IO, TYPE_CHECKING, Any, AnyStr, BinaryIO, Literal, overload
 
 from ..._fs._file import (
     _FILE_ASYNC_METHODS,
-    _FILE_SYNC_ATTRS,
     FileT,
     FileT_co,
     T,
@@ -55,13 +54,6 @@ if TYPE_CHECKING:
 
 
 class IOWrapper(_IOWrapper[FileT_co]):
-    if not TYPE_CHECKING:
-
-        def __getattr__(self, name: str) -> object:
-            if name in _FILE_SYNC_ATTRS:
-                return getattr(self._wrapped, name)
-            raise AttributeError(name)
-
     async def __aenter__(self) -> IOWrapper[FileT_co]:
         return self
 

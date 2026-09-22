@@ -38,27 +38,6 @@ if TYPE_CHECKING:
     )
 
 
-_FILE_SYNC_ATTRS: set[str] = {
-    'closed',
-    'encoding',
-    'errors',
-    'fileno',
-    'isatty',
-    'newlines',
-    'readable',
-    'seekable',
-    'writable',
-    # not defined in *IOBase:
-    'buffer',
-    'raw',
-    'line_buffering',
-    'closefd',
-    'name',
-    'mode',
-    'getvalue',
-    'getbuffer',
-}
-
 _FILE_ASYNC_METHODS: set[str] = {
     'close',
     'flush',
@@ -209,52 +188,69 @@ class _IOWrapper(Generic[FileT_co]):
     def wrapped(self) -> FileT_co:
         return self._wrapped
 
-    def __dir__(self) -> Iterable[str]:
-        attrs = set(super().__dir__())
-        attrs.update(a for a in _FILE_SYNC_ATTRS if hasattr(self.wrapped, a))
-        attrs.update(a for a in _FILE_ASYNC_METHODS if hasattr(self.wrapped, a))
-        return attrs
+    @property
+    def closed(self: _IOWrapper[_HasClosed]) -> bool:
+        return self._wrapped.closed
 
-    if TYPE_CHECKING:
+    @property
+    def encoding(self: _IOWrapper[_HasEncoding]) -> str:
+        return self._wrapped.encoding
 
-        @property
-        def closed(self: _IOWrapper[_HasClosed]) -> bool: ...
-        @property
-        def encoding(self: _IOWrapper[_HasEncoding]) -> str: ...
-        @property
-        def errors(self: _IOWrapper[_HasErrors]) -> str | None: ...
-        @property
-        def newlines(self: _IOWrapper[_HasNewlines[T]]) -> T: ...
-        @property
-        def buffer(self: _IOWrapper[_HasBuffer]) -> BinaryIO: ...
-        @property
-        def raw(self: _IOWrapper[_HasRaw]) -> io.RawIOBase: ...
-        @property
-        def line_buffering(self: _IOWrapper[_HasLineBuffering]) -> int: ...
-        @property
-        def closefd(self: _IOWrapper[_HasCloseFD]) -> bool: ...
-        @property
-        def name(self: _IOWrapper[_HasName]) -> str: ...
-        @property
-        def mode(self: _IOWrapper[_HasMode]) -> str: ...
+    @property
+    def errors(self: _IOWrapper[_HasErrors]) -> str | None:
+        return self._wrapped.errors
 
-        def fileno(self: _IOWrapper[_HasFileNo]) -> int: ...
-        def isatty(self: _IOWrapper[_HasIsATTY]) -> bool: ...
-        def readable(self: _IOWrapper[_HasReadable]) -> bool: ...
-        def seekable(self: _IOWrapper[_HasSeekable]) -> bool: ...
-        def writable(self: _IOWrapper[_HasWritable]) -> bool: ...
-        def getvalue(self: _IOWrapper[_CanGetValue[AnyStr]]) -> AnyStr: ...
-        def getbuffer(self: _IOWrapper[_CanGetBuffer]) -> memoryview: ...
+    @property
+    def newlines(self: _IOWrapper[_HasNewlines[T]]) -> T:
+        return self._wrapped.newlines
+
+    @property
+    def buffer(self: _IOWrapper[_HasBuffer]) -> BinaryIO:
+        return self._wrapped.buffer
+
+    @property
+    def raw(self: _IOWrapper[_HasRaw]) -> io.RawIOBase:
+        return self._wrapped.raw
+
+    @property
+    def line_buffering(self: _IOWrapper[_HasLineBuffering]) -> bool:
+        return self._wrapped.line_buffering
+
+    @property
+    def closefd(self: _IOWrapper[_HasCloseFD]) -> bool:
+        return self._wrapped.closefd
+
+    @property
+    def name(self: _IOWrapper[_HasName]) -> str:
+        return self._wrapped.name
+
+    @property
+    def mode(self: _IOWrapper[_HasMode]) -> str:
+        return self._wrapped.mode
+
+    def fileno(self: _IOWrapper[_HasFileNo]) -> int:
+        return self._wrapped.fileno()
+
+    def isatty(self: _IOWrapper[_HasIsATTY]) -> bool:
+        return self._wrapped.isatty()
+
+    def readable(self: _IOWrapper[_HasReadable]) -> bool:
+        return self._wrapped.readable()
+
+    def seekable(self: _IOWrapper[_HasSeekable]) -> bool:
+        return self._wrapped.seekable()
+
+    def writable(self: _IOWrapper[_HasWritable]) -> bool:
+        return self._wrapped.writable()
+
+    def getvalue(self: _IOWrapper[_CanGetValue[AnyStr]]) -> AnyStr:
+        return self._wrapped.getvalue()
+
+    def getbuffer(self: _IOWrapper[_CanGetBuffer]) -> memoryview:
+        return self._wrapped.getbuffer()
 
 
 class IOWrapper(_IOWrapper[FileT_co]):
-    if not TYPE_CHECKING:
-
-        def __getattr__(self, name: str) -> object:
-            if name in _FILE_SYNC_ATTRS:
-                return getattr(self._wrapped, name)
-            raise AttributeError(name)
-
     def __enter__(self) -> IOWrapper[FileT_co]:
         return self
 
