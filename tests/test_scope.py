@@ -6,23 +6,31 @@ import tonio
 def test_scope_cancel(run):
     enter = []
     exit = []
+    g1, g2, b1, b2, e1, e2 = (tonio.Event() for _ in range(6))
 
-    def _sleep(idx, t):
+    def _child(idx, g, b, e):
         enter.append(idx)
-        yield tonio.sleep(t)
-        exit.append(idx)
+        b.set()
+        try:
+            yield g.wait()
+            exit.append(idx)
+        finally:
+            e.set()
 
     def _run():
         with tonio.scope() as scope:
-            scope.spawn(_sleep(1, 0.1))
-            scope.spawn(_sleep(2, 2))
-            yield tonio.sleep(0.2)
+            scope.spawn(_child(1, g1, b1, e1))
+            scope.spawn(_child(2, g2, b2, e2))
+            yield b2.wait()
+            g1.set()
+            yield e1.wait()
             scope.cancel()
+
         # `spawn` calls after exit are noop
-        scope.spawn(_sleep(3, 0.1))
+        scope.spawn(_child(3, tonio.Event(), tonio.Event(), None))
 
         yield scope()
-        yield tonio.sleep(2)
+        yield e2.wait()
 
     run(_run())
 
@@ -33,22 +41,29 @@ def test_scope_cancel(run):
 def test_scope_cancel_on_exc(run):
     enter = []
     exit = []
+    g1, g2, b1, b2, e1, e2 = (tonio.Event() for _ in range(6))
 
-    def _sleep(idx, t):
+    def _child(idx, g, b, e):
         enter.append(idx)
-        yield tonio.sleep(t)
-        exit.append(idx)
+        b.set()
+        try:
+            yield g.wait()
+            exit.append(idx)
+        finally:
+            e.set()
 
     def _run():
         with contextlib.suppress(RuntimeError):
             with tonio.scope(cancel_on_exc=True) as scope:
-                scope.spawn(_sleep(1, 0.1))
-                scope.spawn(_sleep(2, 2))
-                yield tonio.sleep(0.2)
+                scope.spawn(_child(1, g1, b1, e1))
+                scope.spawn(_child(2, g2, b2, e2))
+                yield b2.wait()
+                g1.set()
+                yield e1.wait()
                 raise RuntimeError
 
         yield scope()
-        yield tonio.sleep(2)
+        yield e2.wait()
 
     run(_run())
 
