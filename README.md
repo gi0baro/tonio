@@ -2,7 +2,7 @@
 
 TonIO is a multi-threaded async runtime for free-threaded Python, built in Rust on top of the [mio crate](https://github.com/tokio-rs/mio), and inspired by [tinyio](https://github.com/patrick-kidger/tinyio), [trio](https://github.com/python-trio/trio) and [tokio](https://github.com/tokio-rs/tokio).
 
-> **Warning**: TonIO is currently a work in progress and in alpha state. The APIs are subtle to breaking changes.
+> **Warning**: TonIO is currently a work in progress. The APIs are subject to breaking changes.
 
 > **Note:** TonIO is available on free-threaded Python only. Windows is supported on a best-effort basis.
 
@@ -19,19 +19,21 @@ TonIO supports both using `yield` and the more canonical `async/await` notations
 ```python
 import tonio
 
-def wait_and_add(x: int) -> int:
+def wait_and_add(x):
     yield tonio.sleep(1)
     return x + 1
 
-def foo():
-    four, five = yield tonio.spawn(
+@tonio.main
+def main():
+    parallel = tonio.spawn(
         wait_and_add(3), 
         wait_and_add(4)
     )
-    return four, five
+    six = yield wait_and_add(5)
+    four, five = yield parallel
+    return four, five, six
 
-out = tonio.run(foo())
-assert out == (4, 5)
+assert main() == (4, 5, 6)
 ```
 </td><td>
 
@@ -40,19 +42,21 @@ assert out == (4, 5)
 ```python
 import tonio.colored as tonio
 
-async def wait_and_add(x: int) -> int:
+async def wait_and_add(x):
     await tonio.sleep(1)
     return x + 1
 
-async def foo():
-    four, five = await tonio.spawn(
+@tonio.main
+async def main():
+    parallel = tonio.spawn(
         wait_and_add(3), 
         wait_and_add(4)
     )
-    return four, five
+    six = await wait_and_add(5)
+    four, five = await parallel
+    return four, five, six
 
-out = tonio.run(foo())
-assert out == (4, 5)
+assert main() == (4, 5, 6)
 ```
 </td></tr></table>
 
@@ -60,7 +64,7 @@ assert out == (4, 5)
 
 ### Entrypoint
 
-Every TonIO program consist of an entrypoint, which should be passed to the `run` method:
+Every TonIO program consists of an entrypoint, which should be passed to the `run` method:
 
 <table><tr><td>
 
@@ -84,7 +88,7 @@ import tonio.colored as tonio
 
 async def main():
     await tonio.yield_now()
-    print("Hellow world")
+    print("Hello world")
 
 tonio.run(main())
 ```
@@ -204,6 +208,46 @@ async def main():
 ```
 </td></tr></table>
 
+#### Waiters
+
+`Event.wait` returns a `Waiter`, the object the runtime actually suspends on. Waiters can be combined: `w1 & w2` unblocks when both are set, `w1 | w2` when either is. When the operands carry timeouts, `&` keeps the longest and `|` the shortest.
+
+Waiters can also be built directly from events with `Waiter(ev1, ev2)` (all) and `Waiter.any(ev1, ev2)`. Both accept a `timeout` that applies to the waiter as a whole, and expressed in **microseconds**.
+
+<table><tr><td>
+
+`yield` syntax
+
+```python
+import tonio
+
+@tonio.main
+def main():
+    ready, stop = tonio.Event(), tonio.Event()
+    yield ready.wait() | stop.wait()
+    if stop.is_set():
+        return
+```
+</td><td>
+
+`await` syntax
+
+```python
+import tonio.colored as tonio
+
+@tonio.main
+async def main():
+    ready, stop = tonio.Event(), tonio.Event()
+    await (ready.wait() | stop.wait())
+    if stop.is_set():
+        return
+```
+</td></tr></table>
+
+#### Result
+
+`Result` is a thread-safe slot to hand values across coroutines, typically paired with an `Event`. `store(value)` writes it and `fetch()` reads it back. Built with a `size`, it holds that many slots, `store(value, index)` fills one and `fetch()` returns them as a list.
+
 ### Spawning tasks
 
 TonIO provides the `spawn` method to schedule new coroutines onto the runtime:
@@ -246,7 +290,9 @@ async def main():
 ```
 </td></tr></table>
 
-Coroutines passed to `spawn` get schedule onto the runtime immediately. Using `yield` or `await` on the return value of `spawn` just waits for the coroutines to complete and retreive the results.
+Coroutines passed to `spawn` get scheduled onto the runtime immediately. Using `yield` or `await` on the return value of `spawn` just waits for the coroutines to complete and retrieve the results.
+
+When results are not needed, `spawn.without_results` waits for completion without collecting them. `spawn.without_tracking` schedules the coroutines and returns nothing at all, for fire-and-forget work.
 
 #### Blocking tasks
 
@@ -260,7 +306,7 @@ TonIO provides the `spawn_blocking` method to schedule blocking operations onto 
 import tonio
 
 def read_file(path):
-    with open(file, "r") as f:
+    with open(path, "r") as f:
         return f.read()
 
 @tonio.main
@@ -278,7 +324,7 @@ def main():
 import tonio.colored as tonio
 
 def read_file(path):
-    with open(file, "r") as f:
+    with open(path, "r") as f:
         return f.read()
 
 @tonio.main
@@ -403,8 +449,8 @@ def slow_push(target, sleep):
 def main():
     values = []
     with tonio.scope() as scope:
-        scope.spawn(_slow_push(values, 0.1))
-        scope.spawn(_slow_push(values, 2))
+        scope.spawn(slow_push(values, 0.1))
+        scope.spawn(slow_push(values, 2))
         yield tonio.sleep(0.2)
         scope.cancel()
     yield scope()
@@ -425,8 +471,8 @@ async def slow_push(target, sleep):
 async def main():
     values = []
     async with tonio.scope() as scope:
-        scope.spawn(_slow_push(values, 0.1))
-        scope.spawn(_slow_push(values, 2))
+        scope.spawn(slow_push(values, 0.1))
+        scope.spawn(slow_push(values, 2))
         await tonio.sleep(0.2)
         scope.cancel()
     assert len(values) == 1
@@ -456,8 +502,8 @@ def slow_push(target, sleep):
 def main():
     values = []
     yield tonio.select(
-        _slow_push(values, 0.1),
-        _slow_push(values, 2)
+        slow_push(values, 0.1),
+        slow_push(values, 2)
     )
     assert len(values) == 1
 ```
@@ -476,12 +522,14 @@ async def slow_push(target, sleep):
 async def main():
     values = []
     await tonio.select(
-        _slow_push(values, 0.1),
-        _slow_push(values, 2)
+        slow_push(values, 0.1),
+        slow_push(values, 2)
     )
     assert len(values) == 1
 ```
 </td></tr></table>
+
+`select` also accepts waiters, so an `Event.wait()` can race against coroutines.
 
 ### Time-related functions
 
@@ -776,7 +824,7 @@ from tonio.sync import channel
 
 def producer(sender, barrier, offset):
     for i in range(20):
-        message = offset + 1
+        message = offset + i
         yield sender.send(message)
     yield barrier.wait()
 
@@ -785,7 +833,7 @@ def consumer(receiver):
         try:
             message = yield receiver.receive()
             print(message)
-        except Exception:
+        except BrokenPipeError:
             break
 
 @tonio.main
@@ -817,7 +865,7 @@ from tonio.colored.sync import channel
 
 async def producer(sender, barrier, offset):
     for i in range(20):
-        message = offset + 1
+        message = offset + i
         await sender.send(message)
     await barrier.wait()
 
@@ -826,7 +874,7 @@ async def consumer(receiver):
         try:
             message = await receiver.receive()
             print(message)
-        except Exception:
+        except BrokenPipeError:
             break
 
 @tonio.main
@@ -862,7 +910,7 @@ from tonio.sync import channel
 
 def producer(sender, barrier, offset):
     for i in range(20):
-        message = offset + 1
+        message = offset + i
         sender.send(message)
     yield barrier.wait()
 
@@ -871,7 +919,7 @@ def consumer(receiver):
         try:
             message = yield receiver.receive()
             print(message)
-        except Exception:
+        except BrokenPipeError:
             break
 
 @tonio.main
@@ -903,7 +951,7 @@ from tonio.colored.sync import channel
 
 async def producer(sender, barrier, offset):
     for i in range(20):
-        message = offset + 1
+        message = offset + i
         sender.send(message)
     await barrier.wait()
 
@@ -912,7 +960,7 @@ async def consumer(receiver):
         try:
             message = await receiver.receive()
             print(message)
-        except Exception:
+        except BrokenPipeError:
             break
 
 @tonio.main
@@ -934,6 +982,21 @@ async def main():
     ])
 ```
 </td></tr></table>
+
+##### Non-blocking operations
+
+Receivers of both channel kinds offer `receive_nowait`, a synchronous variant that never suspends: it returns the message or one of the `Empty` and `Closed` sentinels. Bounded senders, the only suspending ones, offer `send_nowait` in the same way: it returns `None` on success or one of the `Full` and `Closed` sentinels. The sentinels are available as attributes on the objects exposing them:
+
+```python
+sender, receiver = channel.channel(8)
+
+if sender.send_nowait(message) is sender.Full:
+    ...
+if (message := receiver.receive_nowait()) is receiver.Empty:
+    ...
+```
+
+The same objects also expose `try_send` and `try_receive`, which raise instead: `WouldBlock` when the channel is full or empty, `BrokenPipeError` when it's closed.
 
 ### Markers
 
@@ -991,10 +1054,10 @@ Network primitives are exposed under the `tonio.net` module.
 
 #### Streams
 
-The high-level network primitives in TonIO are centered aroud the `SocketStream` and `SocketListener` objects.
+The high-level network primitives in TonIO are centered around the `SocketStream` and `SocketListener` objects.
 
 The `SocketListener` object implements an `accept` coroutine which returns a `SocketStream` object.    
-The `SocketStream` object implements the `send_all` and `receive_some` coroutines to send and receive data.    
+The `SocketStream` object implements the `send_all` and `receive_some` coroutines to send and receive data, and a `send_eof` method to shutdown the sending side.    
 Both objects implement a `close` method to shutdown the underlying socket.
 
 You can create and interact with the above objects using some high-level helpers in the `net` module, specifically:
@@ -1031,7 +1094,7 @@ def client():
         port=8000
     )
     # send some data
-    yield stream.send_all("message")
+    yield stream.send_all(b"message")
 ```
 </td><td>
 
@@ -1057,7 +1120,7 @@ async def client():
         port=8000
     )
     # send some data
-    await stream.send_all("message")
+    await stream.send_all(b"message")
 ```
 </td></tr></table>
 
@@ -1081,7 +1144,7 @@ def client():
     stream = yield open_unix_socket(
         '/tmp/app.sock'
     )
-    yield stream.send_all("message")
+    yield stream.send_all(b"message")
 ```
 </td><td>
 
@@ -1101,7 +1164,52 @@ async def client():
     stream = await open_unix_socket(
         '/tmp/app.sock'
     )
-    await stream.send_all("message")
+    await stream.send_all(b"message")
+```
+</td></tr></table>
+
+##### Readiness and non-blocking operations
+
+`SocketStream` also exposes its readiness state, for code that wants to decide when to read or write rather than just block on it:
+
+- `wait_readable(timeout=None)` and `wait_writable(timeout=None)`: coroutines that suspend until the socket is ready, returning `False` if the timeout (in seconds) expires first
+- `receive_some_nowait(max_bytes=None)`: a synchronous receive, returning the `NotReady` sentinel (available as `stream.NotReady`) when no data is available
+- `try_receive_some(max_bytes=None)`: same, but raising `WouldBlock` instead
+- `watch_readable()` and `watch_writable()`: context managers producing a watcher, whose `waiter()` method returns a `Waiter` (or `None` when ready) you can combine with others, and whose `ready()` method tells whether the socket is ready
+
+<table><tr><td>
+
+`yield` syntax
+
+```python
+def handler(stream, stop):
+    while True:
+        with stream.watch_readable() as watcher:
+            if (waiter := watcher.waiter()) is not None:
+                yield waiter | stop.wait()
+            if stop.is_set():
+                break
+        data = stream.receive_some_nowait()
+        if data is stream.NotReady:
+            continue
+        ...
+```
+</td><td>
+
+`await` syntax
+
+```python
+async def handler(stream, stop):
+    while True:
+        with stream.watch_readable() as watcher:
+            if (waiter := watcher.waiter()) is not None:
+                await (waiter | stop.wait())
+            if stop.is_set():
+                break
+        data = stream.receive_some_nowait()
+        if data is stream.NotReady:
+            continue
+        ...
 ```
 </td></tr></table>
 
@@ -1149,7 +1257,7 @@ def client():
     sock = socket.socket()
     with sock:
         yield sock.connect(('127.0.0.1', 8000))
-        yield sock.send("message")
+        yield sock.send(b"message")
 ```
 </td><td>
 
@@ -1178,7 +1286,7 @@ async def client():
     sock = socket.socket()
     with sock:
         await sock.connect(('127.0.0.1', 8000))
-        await sock.send("message")
+        await sock.send(b"message")
 ```
 </td></tr></table>
 
@@ -1369,6 +1477,116 @@ The `Process` object exposes:
 
 > **Note:** on Windows, due to the platform's lack of features, the subprocess readiness implementation falls back to the blocking thread-pool. Thus, waiting on a process or read/write operations on pipes can't be interrupted while blocked: cancellations take effect only once the OS call returns.
 
+### Driving your own I/O
+
+The `io` module exposes the primitives TonIO's own sockets, pipes and processes are built on, so you can plug any file descriptor the platform poller understands into the runtime, with the same readiness model.
+
+`register` puts a descriptor under the poller's watch, for both reading and writing, and returns a `ScheduledIO` object. The registration is edge-triggered and lasts until you `close` it. The descriptor itself is neither owned nor switched to non-blocking mode: that's up to you.
+
+Readiness is consumed in user space through a small protocol: `arm_r` (or `arm_w`) returns `None` if the descriptor is known to be ready, otherwise a `Waiter` to suspend on. Once ready, you perform the actual system call. If it would block anyway, `clear_r` (or `clear_w`) drops the stale readiness, so the next `arm_r` suspends again.
+
+<table><tr><td>
+
+`yield` syntax
+
+```python
+import os
+import tonio
+
+def read_some(sched, fd, max_bytes=65536):
+    while True:
+        if (waiter := sched.arm_r()) is not None:
+            yield waiter
+            continue
+        try:
+            return os.read(fd, max_bytes)
+        except BlockingIOError:
+            sched.clear_r()
+
+@tonio.main
+def main():
+    r, w = os.pipe()
+    os.set_blocking(r, False)
+    sched = tonio.io.register(r)
+    os.write(w, b"hello")
+    print((yield read_some(sched, r)))
+    sched.close()
+```
+</td><td>
+
+`await` syntax
+
+```python
+import os
+import tonio.colored as tonio
+
+async def read_some(sched, fd, max_bytes=65536):
+    while True:
+        if (waiter := sched.arm_r()) is not None:
+            await waiter
+            continue
+        try:
+            return os.read(fd, max_bytes)
+        except BlockingIOError:
+            sched.clear_r()
+
+@tonio.main
+async def main():
+    r, w = os.pipe()
+    os.set_blocking(r, False)
+    sched = tonio.io.register(r)
+    os.write(w, b"hello")
+    print(await read_some(sched, r))
+    sched.close()
+```
+</td></tr></table>
+
+`arm_r` and `arm_w` accept a `timeout` in seconds. An expired waiter just resumes, so a further `arm_*` call tells whether the descriptor got ready in the meantime. Readiness also covers hang-ups and errors: you'll be woken up when the peer goes away, and the following system call will report it.
+
+`consume_r` and `consume_w` drain a direction's readiness and tell whether it was set, for descriptors signalling through readiness alone.
+
+#### Descriptor streams
+
+`FdStream` wraps a pipe-like descriptor into the same stream interface of the network module, taking ownership of it. It provides the `send_all` and `receive_some` coroutines, `fileno` and `close`, the latter also invoked when leaving a `with` block. This is what the pipes of `Process` objects are.
+
+<table><tr><td>
+
+`yield` syntax
+
+```python
+import os
+import tonio
+from tonio.io import FdStream
+
+@tonio.main
+def main():
+    r, w = os.pipe()
+    with FdStream(r) as reader, FdStream(w) as writer:
+        yield writer.send_all(b"hello")
+        print((yield reader.receive_some()))
+```
+</td><td>
+
+`await` syntax
+
+```python
+import os
+import tonio.colored as tonio
+from tonio.colored.io import FdStream
+
+@tonio.main
+async def main():
+    r, w = os.pipe()
+    with FdStream(r) as reader, FdStream(w) as writer:
+        await writer.send_all(b"hello")
+        print(await reader.receive_some())
+```
+</td></tr></table>
+
+Concurrent operations on the same direction of a stream raise `WouldBlock`, and a broken pipe surfaces as `ResourceBroken`.
+
+> **Note:** on Windows `FdStream` falls back to the blocking thread-pool, with the same limitations described for subprocesses.
+
 ### Signals
 
 TonIO provides a context manager to catch signals.
@@ -1431,6 +1649,17 @@ async def main():
         await ticker.tick()
 ```
 </td></tr></table>
+
+### Exceptions
+
+The `tonio.exceptions` module exposes:
+
+- `CancelledError`: raised inside a coroutine when it gets cancelled
+- `TimeoutError`: raised when a timed operation expires
+- `WouldBlock`: raised by the `or_raise` and `try_*` variants when the operation cannot complete immediately
+- `ResourceBroken`: raised by streams when the underlying transport is unusable
+
+> **Note:** `CancelledError` and `TimeoutError` derive from `BaseException`, so they pass through `except Exception` clauses.
 
 ### Testing
 
@@ -1544,7 +1773,7 @@ the following libraries target TonIO natively:
 
 - [httpunk](https://github.com/gi0baro/httpunk): a low-level async HTTP library
 - [punkreq](https://github.com/gi0baro/punkreq): a high-level async HTTP client
-- [toncorn](https://github.com/gi0baro/toncorn): a [uvicorn](https://github.com/Kludex/uvicorn) fork built on TonIO
+- [punkasgi](https://github.com/gi0baro/punkasgi): an ASGI server built on TonIO
 
 ## License
 
