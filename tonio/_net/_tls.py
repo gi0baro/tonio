@@ -12,7 +12,7 @@ import threading
 from typing import Any
 
 from .._sync import Lock
-from .._tonio import ResourceBroken, TLSStream as _TLSStream
+from .._tonio import ResourceBroken, TLSStream as _TLSStream, Waiter, WouldBlock, get_runtime
 from .._types import Coro
 from ._streams import _Stream
 
@@ -64,6 +64,10 @@ class _SSLProxy:
         with self._lock:
             return self._inner.pending()
 
+    def _pending(self) -> bool:
+        with self._lock:
+            return bool(self._inner.pending() or self._ingress.pending)
+
     @property
     def _ingress_pending(self) -> int:
         with self._lock:
@@ -79,6 +83,13 @@ class _SSLProxy:
 
     def _read(self, max_bytes: int) -> tuple[Any, bool, bytes]:
         return self._step(self._inner.read, max_bytes)
+
+    def _read_nowait(self, max_bytes: int) -> tuple[Any, bool]:
+        with self._lock:
+            try:
+                return self._inner.read(max_bytes), False
+            except _stdlib_ssl.SSLWantReadError:
+                return None, True
 
     def _write(self, data) -> tuple[Any, bool, bytes]:
         return self._step(self._inner.write, data)
@@ -97,6 +108,36 @@ class _SSLProxy:
             except _stdlib_ssl.SSLWantReadError:
                 want_read = True
             return ret, want_read, self._egress.read()
+
+
+class TLSStreamWatcher:
+    __slots__ = ['_lock', '_pending', '_arm', '_handoff']
+
+    def __init__(self, lock: Lock, pending, arm):
+        self._lock = lock
+        self._pending = pending
+        self._arm = arm
+        self._handoff = None
+
+    def __enter__(self):
+        self._handoff = self._lock.acquire()
+        return self
+
+    def waiter(self, timeout: int | None = None) -> Waiter | None:
+        if self._handoff is not None:
+            return self._handoff.waiter(timeout)
+        if self._pending():
+            return None
+        return self._arm(timeout)
+
+    def ready(self) -> bool:
+        if self._handoff is not None:
+            return self._handoff.is_set() and self._pending()
+        return self._pending() or self._arm() is None
+
+    def __exit__(self, *args):
+        if self._handoff is None or not self._handoff.set():
+            self._lock.release()
 
 
 class TLSStream(_Stream, _TLSStream):
@@ -215,6 +256,95 @@ class TLSStream(_Stream, _TLSStream):
             if self._compat_https and _is_eof(exc.__cause__):
                 return b''
             raise
+
+    def wait_readable(self, timeout: int | float | None = None) -> Coro[bool]:
+        self._check_ready()
+        if self._ssl._pending():
+            return True
+        if timeout is None:
+            while True:
+                with self.watch_readable() as watcher:
+                    if (waiter := watcher.waiter()) is None:
+                        return True
+                    yield waiter
+        runtime = get_runtime()
+        remaining = round(max(timeout, 0) * 1_000_000)
+        deadline = runtime._clock + remaining
+        while True:
+            with self.watch_readable() as watcher:
+                if (waiter := watcher.waiter(remaining)) is None:
+                    return True
+                if remaining == 0:
+                    return False
+                yield waiter
+            remaining = max(deadline - runtime._clock, 0)
+
+    def wait_writable(self, timeout: int | float | None = None) -> Coro[bool]:
+        if timeout is None:
+            while True:
+                with self.watch_writable() as watcher:
+                    if (waiter := watcher.waiter()) is None:
+                        return True
+                    yield waiter
+        runtime = get_runtime()
+        remaining = round(max(timeout, 0) * 1_000_000)
+        deadline = runtime._clock + remaining
+        while True:
+            with self.watch_writable() as watcher:
+                if (waiter := watcher.waiter(remaining)) is None:
+                    return True
+                if remaining == 0:
+                    return False
+                yield waiter
+            remaining = max(deadline - runtime._clock, 0)
+
+    def watch_readable(self) -> TLSStreamWatcher:
+        self._check_ready()
+        return TLSStreamWatcher(self._lock_recv, self._ssl._pending, self.transport.waiter_readable)
+
+    def watch_writable(self) -> TLSStreamWatcher:
+        self._check_ready()
+        return TLSStreamWatcher(self._lock_send, lambda: False, self.transport.waiter_writable)
+
+    def receive_some_nowait(self, max_bytes: int | None = None) -> bytes | bytearray | type[_Stream.NotReady]:
+        self._check_ready()
+        if max_bytes is None:
+            max_bytes = max(self._recv_est_size, self._ssl._ingress_pending)
+        try:
+            while True:
+                try:
+                    ret, want_read = self._ssl._read_nowait(max_bytes)
+                except (_stdlib_ssl.SSLError, _stdlib_ssl.CertificateError) as exc:
+                    self._set_broken()
+                    raise ResourceBroken from exc
+                if not want_read:
+                    return ret
+
+                try:
+                    lock = self._lock_recv.or_raise()
+                except WouldBlock:
+                    return self.NotReady
+                with lock:
+                    if (data := self.transport.receive_some_nowait()) is self.NotReady:
+                        return self.NotReady
+                    if not data:
+                        self._ssl._ingress_write_eof()
+                    else:
+                        self._recv_est_size = max(
+                            self._recv_est_size,
+                            len(data),
+                        )
+                        self._ssl._ingress_write(data)
+                    self._recv_count += 1
+        except ResourceBroken as exc:
+            if self._compat_https and _is_eof(exc.__cause__):
+                return b''
+            raise
+
+    def try_receive_some(self, max_bytes: int | None = None) -> bytes | bytearray:
+        if (ret := self.receive_some_nowait(max_bytes)) is self.NotReady:
+            raise WouldBlock('Not ready')
+        return ret
 
     def close(self) -> Coro[None]:
         if self._state == 4:
