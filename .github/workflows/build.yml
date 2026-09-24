@@ -102,6 +102,7 @@ jobs:
           docker-options: -e CI
         env:
           RUSTFLAGS: "-Cprofile-generate=${{ github.workspace }}/profdata"
+          CFLAGS: ${{ startsWith(matrix.os, 'macos') && '-DMI_HAS_TLS_SLOT=0' || '' }}
       - run: |
           RUST_HOST=$(rustc -Vv | grep host | cut -d ' ' -f 2) rustup run stable bash -c 'echo LLVM_PROFDATA=$RUSTUP_HOME/toolchains/$RUSTUP_TOOLCHAIN/lib/rustlib/$RUST_HOST/bin/llvm-profdata >> "$GITHUB_ENV"'
         shell: bash
@@ -127,6 +128,7 @@ jobs:
           docker-options: -e CI
         env:
           RUSTFLAGS: "-Cprofile-use=${{ github.workspace }}/merged.profdata"
+          CFLAGS: ${{ startsWith(matrix.os, 'macos') && '-DMI_HAS_TLS_SLOT=0' || '' }}
       - name: Upload wheels
         uses: actions/upload-artifact@v7
         with:
