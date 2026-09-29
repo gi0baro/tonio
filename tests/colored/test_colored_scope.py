@@ -66,27 +66,68 @@ def test_scope_cancel_on_exc(run):
     assert set(exit) == {1}
 
 
-def test_scope_cancel_immediate(run):
+def test_scope_cancel_takes_effect_on_exit(run):
     enter = []
     exit = []
+    g, b, e = (tonio.Event() for _ in range(3))
 
-    async def _sleep(idx, t):
-        enter.append(idx)
-        await tonio.sleep(t)
-        exit.append(idx)
+    async def _child():
+        enter.append(1)
+        b.set()
+        try:
+            await g.wait()
+            exit.append(1)
+        finally:
+            e.set()
 
     async def _run():
         async with tonio.scope() as scope:
             scope.cancel()
-            scope.spawn(_sleep(1, 0.3))
-            await tonio.sleep(0.1)
+            scope.spawn(_child())
+            await b.wait()
 
-        await tonio.sleep(0.5)
+        await e.wait()
 
     run(_run())
 
     assert set(enter) == {1}
     assert not exit
+
+
+def test_scope_cancellations_are_terminal(run):
+    seen = []
+    never, started, done = tonio.Event(), tonio.Event(), tonio.Event()
+
+    async def _child():
+        started.set()
+        try:
+            await never.wait()
+        except tonio.exceptions.CancelledError:
+            seen.append('abort1')
+            try:
+                await never.wait()
+                seen.append('resume')
+            except tonio.exceptions.CancelledError:
+                seen.append('abort2')
+        finally:
+            try:
+                await never.wait()
+                seen.append('resume')
+            except tonio.exceptions.CancelledError:
+                seen.append('abort3')
+            done.set()
+
+    async def _run():
+        async with tonio.scope() as scope:
+            scope.spawn(_child())
+            await started.wait()
+            scope.cancel()
+        await done.wait(1)
+
+    run(_run())
+
+    assert seen == ['abort1', 'abort2', 'abort3']
+    assert done.is_set()
 
 
 def test_scope_checkpoint_finalize_children(run):

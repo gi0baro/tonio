@@ -865,6 +865,7 @@ impl PyAsyncGenSuspension {
                 let handle = handles::PyAsyncGenThrower {
                     coro: target.clone_ref(py),
                     value,
+                    checkpoint: self.checkpoint.clone(),
                 };
                 Box::new(handle)
             }
@@ -873,6 +874,7 @@ impl PyAsyncGenSuspension {
                     coro: target.clone_ref(py),
                     ctx: ctx.clone_ref(py),
                     value,
+                    checkpoint: self.checkpoint.clone(),
                 };
                 Box::new(handle)
             }

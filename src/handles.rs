@@ -491,22 +491,47 @@ impl Handle for PyGenCtxThrower {
 pub(crate) struct PyAsyncGenThrower {
     pub coro: Py<PyAny>,
     pub value: Py<PyAny>,
+    pub checkpoint: Option<Arc<Py<Waiter>>>,
 }
 
 impl Handle for PyAsyncGenThrower {
-    fn run(self: Box<Self>, py: Python, _runtime: &Py<Runtime>, _state: &mut WorkerState) {
+    fn run(self: Box<Self>, py: Python, runtime: &Py<Runtime>, _state: &mut WorkerState) {
         let throw_method = pyo3::intern!(py, "throw");
 
         unsafe {
             let ret =
                 pyo3::ffi::PyObject_CallMethodOneArg(self.coro.as_ptr(), throw_method.as_ptr(), self.value.as_ptr());
-            let res = Bound::from_owned_ptr_or_err(py, ret);
-            if let Err(err) = res
-                && !err.is_instance_of::<pyo3::exceptions::PyStopIteration>(py)
-                && cfg!(debug_assertions)
-            {
-                println!("UNHANDLED PYASYNCGEN THROW {:?}", self.coro.bind(py));
-                err.print(py);
+
+            match Bound::from_owned_ptr_or_err(py, ret) {
+                Ok(val) => {
+                    let Self { coro, checkpoint, .. } = *self;
+
+                    if ret == py.None().as_ptr() {
+                        runtime.get().defer_handle(Box::new(PyAsyncGenHandle {
+                            coro,
+                            value: val.unbind(),
+                            checkpoint,
+                        }));
+                        return;
+                    }
+
+                    match val.cast_into_exact::<Waiter>() {
+                        Ok(waiter) => Waiter::register_pyasyncgen(
+                            waiter.unbind(),
+                            py,
+                            runtime.clone_ref(py),
+                            SuspensionTarget::AsyncGen(coro),
+                            checkpoint,
+                        ),
+                        Err(err) => panic!("Got unsupported value {:?} from asyncgen throw", err.into_inner()),
+                    }
+                }
+                Err(err) => {
+                    if !err.is_instance_of::<pyo3::exceptions::PyStopIteration>(py) && cfg!(debug_assertions) {
+                        println!("UNHANDLED PYASYNCGEN THROW {:?}", self.coro.bind(py));
+                        err.print(py);
+                    }
+                }
             }
         }
     }
@@ -516,10 +541,11 @@ pub(crate) struct PyAsyncGenCtxThrower {
     pub coro: Py<PyAny>,
     pub ctx: Py<PyAny>,
     pub value: Py<PyAny>,
+    pub checkpoint: Option<Arc<Py<Waiter>>>,
 }
 
 impl Handle for PyAsyncGenCtxThrower {
-    fn run(self: Box<Self>, py: Python, _runtime: &Py<Runtime>, _state: &mut WorkerState) {
+    fn run(self: Box<Self>, py: Python, runtime: &Py<Runtime>, _state: &mut WorkerState) {
         let throw_method = pyo3::intern!(py, "throw");
         let ctx = self.ctx.as_ptr();
 
@@ -533,13 +559,39 @@ impl Handle for PyAsyncGenCtxThrower {
             pyo3::ffi::PyContext_Exit(cctx);
             pyo3::ffi::Py_DECREF(cctx);
 
-            let res = Bound::from_owned_ptr_or_err(py, ret);
-            if let Err(err) = res
-                && !err.is_instance_of::<pyo3::exceptions::PyStopIteration>(py)
-                && cfg!(debug_assertions)
-            {
-                println!("UNHANDLED PYASYNCGEN THROW {:?}", self.coro.bind(py));
-                err.print(py);
+            match Bound::from_owned_ptr_or_err(py, ret) {
+                Ok(val) => {
+                    let Self {
+                        coro, ctx, checkpoint, ..
+                    } = *self;
+
+                    if ret == py.None().as_ptr() {
+                        runtime.get().defer_handle(Box::new(PyAsyncGenCtxHandle {
+                            coro,
+                            ctx,
+                            value: val.unbind(),
+                            checkpoint,
+                        }));
+                        return;
+                    }
+
+                    match val.cast_into_exact::<Waiter>() {
+                        Ok(waiter) => Waiter::register_pyasyncgen(
+                            waiter.unbind(),
+                            py,
+                            runtime.clone_ref(py),
+                            SuspensionTarget::AsyncGenCtx((coro, ctx)),
+                            checkpoint,
+                        ),
+                        Err(err) => panic!("Got unsupported value {:?} from asyncgen throw", err.into_inner()),
+                    }
+                }
+                Err(err) => {
+                    if !err.is_instance_of::<pyo3::exceptions::PyStopIteration>(py) && cfg!(debug_assertions) {
+                        println!("UNHANDLED PYASYNCGEN THROW {:?}", self.coro.bind(py));
+                        err.print(py);
+                    }
+                }
             }
         }
     }
