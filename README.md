@@ -432,6 +432,10 @@ async def main():
 
 ### Scopes and cancellations
 
+> **Note:** cancellations in TonIO are *optimistic* and *terminal*; *optimistic* means that cancelling takes effect only at suspension points, *terminal* means that once a coroutine is cancelled every later suspension is cancelled as well.
+
+> **Warning:** some TonIO primitives are not *cancel-safe*; they are marked as such in their sections. An operation is considered *cancel-safe* when cancelling it leaves the objects it operates on untouched.
+
 TonIO provides a `scope` context, that lets you cancel work spawned within it:
 
 <table><tr><td>
@@ -529,7 +533,7 @@ async def main():
 ```
 </td></tr></table>
 
-`select` also accepts waiters, so an `Event.wait()` can race against coroutines.
+> **Note:** `select` also accepts waiters, so an `Event.wait()` can race against coroutines.
 
 ### Time-related functions
 
@@ -599,6 +603,8 @@ from tonio import time
 # tick every 500ms, with the first tick happening in 5 seconds from now
 interval = time.interval(0.5, time.time() + 5)
 ```
+
+> **Warning:** `Interval.tick` is not cancel-safe.
 
 ### Synchronization primitives
 
@@ -802,6 +808,8 @@ async def main():
 ```
 </td></tr></table>
 
+> **Warning:** `Barrier.wait` is not cancel-safe.
+
 The `Barrier` object also implements a `value` method, which returns the current value of the barrier.
 
 #### Channels
@@ -897,6 +905,8 @@ async def main():
 ```
 </td></tr></table>
 
+> **Warning:** `receive` and `send` operations are not cancel-safe in bounded channels.
+
 ##### Unbounded channel
 
 <table><tr><td>
@@ -982,6 +992,8 @@ async def main():
     ])
 ```
 </td></tr></table>
+
+> **Warning:** `receive` is not cancel-safe in unbounded channels.
 
 ##### Non-blocking operations
 
