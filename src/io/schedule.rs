@@ -102,7 +102,7 @@ impl ScheduledIO {
     fn clear(&self, ready: usize, tick: u8) {
         _ = self
             .readiness
-            .fetch_update(atomic::Ordering::AcqRel, atomic::Ordering::Acquire, |curr| {
+            .try_update(atomic::Ordering::AcqRel, atomic::Ordering::Acquire, |curr| {
                 if tick_of(curr) != tick {
                     return None;
                 }
@@ -113,7 +113,7 @@ impl ScheduledIO {
     //: atomically drain the direction's readiness bits, reporting whether any were set
     fn consume(&self, mask: usize) -> bool {
         self.readiness
-            .fetch_update(atomic::Ordering::AcqRel, atomic::Ordering::Acquire, |curr| {
+            .try_update(atomic::Ordering::AcqRel, atomic::Ordering::Acquire, |curr| {
                 if curr & mask == 0 {
                     return None;
                 }
@@ -127,7 +127,7 @@ impl ScheduledIO {
     pub(crate) fn set_readiness(&self, ready: usize) {
         _ = self
             .readiness
-            .fetch_update(atomic::Ordering::AcqRel, atomic::Ordering::Acquire, |curr| {
+            .try_update(atomic::Ordering::AcqRel, atomic::Ordering::Acquire, |curr| {
                 let tick = (usize::from(tick_of(curr).wrapping_add(1))) << TICK_SHIFT;
                 Some(tick | (curr & !TICK_MASK) | ready)
             });
