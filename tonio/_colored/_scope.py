@@ -1,5 +1,4 @@
 from .._tonio import CancelledError, PyAsyncGenScope as _Scope, get_runtime
-from . import yield_now
 
 
 class Scope(_Scope):
@@ -27,8 +26,9 @@ class Scope(_Scope):
         return self
 
     async def __aexit__(self, exc_type, exc_value, exc_tb):
+        if exc_type is CancelledError:
+            self.cancel()
         self._incr(1, exc_type is not None)
-        await yield_now()
         waiter = self._exit()
         await waiter
 

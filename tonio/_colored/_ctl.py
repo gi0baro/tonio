@@ -1,4 +1,3 @@
-import contextlib
 import threading
 from typing import Any, Awaitable, Callable, Iterable, ParamSpec, TypeVar
 
@@ -125,8 +124,16 @@ async def select(*coros: Awaitable[Any]) -> Any:
 
 async def spawn_blocking(fn: Callable[_Params, _Return], /, *args: _Params.args, **kwargs: _Params.kwargs) -> _Return:
     ctl, event, res = get_runtime()._spawn_blocking(fn, *args, **kwargs)
-    with contextlib.suppress(CancelledError):
+    try:
         await event.waiter(None)
+    except CancelledError as exc:
+        ctl.abort()
+        err, val = res.fetch()
+        if err is None:
+            raise exc
+        if err is True:
+            raise val
+        return val
     err, val = res.fetch()
     if err is None:
         ctl.abort()

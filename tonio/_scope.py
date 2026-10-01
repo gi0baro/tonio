@@ -27,6 +27,8 @@ class Scope(_Scope):
         return self
 
     def __exit__(self, exc_type, exc_value, exc_tb):
+        if exc_type is CancelledError:
+            self.cancel()
         self._incr(1, exc_type is not None)
         return
 

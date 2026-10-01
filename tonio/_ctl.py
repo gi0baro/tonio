@@ -1,4 +1,3 @@
-import contextlib
 import threading
 from typing import Any, Callable, Iterable, ParamSpec, TypeVar
 
@@ -89,14 +88,16 @@ def select(*coros: Coro[Any] | Waiter) -> Coro[Any]:
         finally:
             sentinel.set()
 
-    with scope:
-        for coro in coros:
-            scope.spawn(wrapper(coro))
-        yield sentinel.waiter(None)
-        scope.cancel()
+    try:
+        with scope:
+            for coro in coros:
+                scope.spawn(wrapper(coro))
+            yield sentinel.waiter(None)
+            is_err, ret = res.fetch()
+            scope.cancel()
+    finally:
+        yield scope()
 
-    is_err, ret = res.fetch()
-    yield scope()
     if is_err:
         raise ret
     return ret
@@ -104,8 +105,16 @@ def select(*coros: Coro[Any] | Waiter) -> Coro[Any]:
 
 def spawn_blocking(fn: Callable[_Params, _Return], /, *args: _Params.args, **kwargs: _Params.kwargs) -> Coro[_Return]:
     ctl, event, res = get_runtime()._spawn_blocking(fn, *args, **kwargs)
-    with contextlib.suppress(CancelledError):
+    try:
         yield event.waiter(None)
+    except CancelledError as exc:
+        ctl.abort()
+        err, val = res.fetch()
+        if err is None:
+            raise exc
+        if err is True:
+            raise val
+        return val
     err, val = res.fetch()
     if err is None:
         ctl.abort()
