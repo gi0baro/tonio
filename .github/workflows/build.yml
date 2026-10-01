@@ -102,7 +102,7 @@ jobs:
           docker-options: -e CI
         env:
           RUSTFLAGS: "-Cprofile-generate=${{ github.workspace }}/profdata"
-          CFLAGS: ${{ startsWith(matrix.os, 'macos') && '-DMI_HAS_TLS_SLOT=0' || '' }}
+          CFLAGS: ${{ startsWith(matrix.os, 'macos') && '-DMI_HAS_TLS_SLOT=0 -fno-profile-generate' || '' }}
       - run: |
           RUST_HOST=$(rustc -Vv | grep host | cut -d ' ' -f 2) rustup run stable bash -c 'echo LLVM_PROFDATA=$RUSTUP_HOME/toolchains/$RUSTUP_TOOLCHAIN/lib/rustlib/$RUST_HOST/bin/llvm-profdata >> "$GITHUB_ENV"'
         shell: bash
