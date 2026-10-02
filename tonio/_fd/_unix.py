@@ -1,4 +1,5 @@
 import os
+import threading
 
 from .._streams import _Stream
 from .._sync import Lock
@@ -15,8 +16,8 @@ class _FdImpl:
     def close(self) -> None:
         if self.closed:
             return
-        self._io_close()
         fd = self._drop()
+        self._io_close()
         if fd != -1:
             os.close(fd)
 
@@ -37,6 +38,7 @@ class FdStream(_Stream):
         self._fd = Fd(fd)
         self._lock_r = Lock()
         self._lock_w = Lock()
+        self._lock_io = threading.Lock()
 
     def fileno(self) -> int:
         return self._fd.fd
@@ -45,7 +47,6 @@ class FdStream(_Stream):
         if self._fd.closed:
             raise RuntimeError('file closed')
 
-        fd = self.fileno()
         with self._lock_w.or_raise():
             with memoryview(data) as data:
                 if not data:
@@ -60,7 +61,8 @@ class FdStream(_Stream):
                                 continue
 
                             try:
-                                sent += os.write(fd, remaining)
+                                with self._lock_io:
+                                    sent += os.write(self._fd.fd, remaining)
                             except InterruptedError:
                                 pass
                             except BlockingIOError:
@@ -77,7 +79,6 @@ class FdStream(_Stream):
         if self._fd.closed:
             raise RuntimeError('file closed')
 
-        fd = self.fileno()
         with self._lock_r.or_raise():
             while True:
                 if (waiter := self._fd._io_arm_r()) is not None:
@@ -85,7 +86,8 @@ class FdStream(_Stream):
                     continue
 
                 try:
-                    data = os.read(fd, max_bytes)
+                    with self._lock_io:
+                        data = os.read(self._fd.fd, max_bytes)
                 except InterruptedError:
                     pass
                 except BlockingIOError:
@@ -98,7 +100,8 @@ class FdStream(_Stream):
         return data
 
     def close(self):
-        self._fd.close()
+        with self._lock_io:
+            self._fd.close()
 
 
 def open_proc_fd(pid: int) -> ProcFd | None:

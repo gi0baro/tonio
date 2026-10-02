@@ -9,7 +9,6 @@ class FdStream(_FdStream):
         if self._fd.closed:
             raise RuntimeError('file closed')
 
-        fd = self.fileno()
         with self._lock_w.or_raise():
             with memoryview(data) as data:
                 if not data:
@@ -24,7 +23,8 @@ class FdStream(_FdStream):
                                 continue
 
                             try:
-                                sent += os.write(fd, remaining)
+                                with self._lock_io:
+                                    sent += os.write(self._fd.fd, remaining)
                             except InterruptedError:
                                 pass
                             except BlockingIOError:
@@ -41,7 +41,6 @@ class FdStream(_FdStream):
         if self._fd.closed:
             raise RuntimeError('file closed')
 
-        fd = self.fileno()
         with self._lock_r.or_raise():
             while True:
                 if (waiter := self._fd._io_arm_r()) is not None:
@@ -49,7 +48,8 @@ class FdStream(_FdStream):
                     continue
 
                 try:
-                    data = os.read(fd, max_bytes)
+                    with self._lock_io:
+                        data = os.read(self._fd.fd, max_bytes)
                 except InterruptedError:
                     pass
                 except BlockingIOError:
