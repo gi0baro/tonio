@@ -37,7 +37,7 @@ crossbeam-deque = "0.8"
 crossbeam-utils = "0.8"
 mio = { version = "=1.2", git = "https://github.com/gi0baro/mio", branch = "pub-iosource", features = ["net", "os-ext", "os-poll"] }
 papaya = "=0.2"
-pyo3 = { version = "=0.29", features = ["anyhow", "extension-module", "generate-import-lib"] }
+pyo3 = { version = "=0.30", features = ["anyhow", "extension-module", "generate-import-lib"] }
 socket2 = { version = "=0.6", features = ["all"] }
 
 mimalloc = { version = "0.1.49", default-features = false, features = ["local_dynamic_tls"], optional = true }
@@ -47,7 +47,7 @@ tikv-jemallocator = { version = "=0.7", default-features = false, features = ["d
 libc = "0.2.159"
 
 [build-dependencies]
-pyo3-build-config = "=0.29"
+pyo3-build-config = "=0.30"
 
 [features]
 jemalloc = ["dep:tikv-jemallocator"]
