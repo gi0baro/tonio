@@ -1,14 +1,10 @@
 from functools import wraps
-from typing import Callable, ParamSpec, TypeVar
+from typing import Callable
 
 from ._ctl import spawn_blocking
 from ._runtime import run
 from ._sync import Semaphore
 from ._types import Coro
-
-
-_Params = ParamSpec('_Params')
-_Return = TypeVar('_Return')
 
 
 def main(
@@ -49,7 +45,7 @@ def main(
     return wrapper
 
 
-def blocking(fn: Callable[_Params, _Return]) -> Callable[_Params, Coro[_Return]]:
+def blocking[**Params, Return](fn: Callable[Params, Return]) -> Callable[Params, Coro[Return]]:
     @wraps(fn)
     def wrapper(*args, **kwargs):
         return spawn_blocking(fn, *args, **kwargs)
@@ -57,9 +53,9 @@ def blocking(fn: Callable[_Params, _Return]) -> Callable[_Params, Coro[_Return]]
     return wrapper
 
 
-def max_concurrency(
+def max_concurrency[**Params, Return](
     value: int,
-) -> Callable[[Callable[_Params, Coro[_Return]]], Callable[_Params, Coro[_Return]]]:
+) -> Callable[[Callable[Params, Coro[Return]]], Callable[Params, Coro[Return]]]:
     if value < 1:
         raise ValueError('`max_concurrency` value must be >= 1')
     guard = Semaphore(value)
@@ -75,9 +71,9 @@ def max_concurrency(
     return deco
 
 
-def cpu_bound(
+def cpu_bound[**Params, Return](
     concurrency: int | None = None,
-) -> Callable[[Callable[_Params, _Return]], Callable[_Params, Coro[_Return]]]:
+) -> Callable[[Callable[Params, Return]], Callable[Params, Coro[Return]]]:
     def deco(fn):
         wrapper = blocking(fn)
         if concurrency:

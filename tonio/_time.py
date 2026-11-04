@@ -1,11 +1,6 @@
-from typing import TypeVar
-
 from ._events import Event
 from ._tonio import CancelledError, Result, Waiter, get_runtime
 from ._types import Coro
-
-
-_T = TypeVar('_T')
 
 
 class _Interval:
@@ -42,7 +37,7 @@ def sleep(timeout: int | float) -> Coro[None]:
     yield Event().wait(timeout)
 
 
-def timeout(coro: Coro[_T], timeout: int | float) -> Coro[tuple[None | _T, bool]]:
+def timeout[T](coro: Coro[T], timeout: int | float) -> Coro[tuple[None | T, bool]]:
     done = Event()
     res = Result()
     checkpoint = Waiter.checkpoint()
