@@ -36,8 +36,6 @@ pub struct RuntimeState {
     buf: Box<[u8]>,
     io: Poll,
     sig_sock: (socket2::Socket, socket2::Socket),
-    #[cfg(windows)]
-    sig_err: Option<PyErr>,
 }
 
 #[pyclass(frozen, subclass, module = "tonio._tonio")]
@@ -65,7 +63,7 @@ pub struct Runtime {
     sig_wfd: arc_swap::ArcSwap<Py<PyAny>>,
     sig_handlers: papaya::HashMap<u8, Py<crate::events::Event>>,
     sig_listening: atomic::AtomicBool,
-    sig_loop_handled: atomic::AtomicBool,
+    sig_loop_unhandled: atomic::AtomicBool,
     // sig_wfd: RwLock<Py<PyAny>>,
     stopping: atomic::AtomicBool,
     ssock_r: arc_swap::ArcSwap<Py<PyAny>>,
@@ -123,18 +121,7 @@ impl Runtime {
             }
         }
 
-        let poll_result = {
-            py.detach(|| {
-                let res = state.io.poll(events, sched_time.map(Duration::from_micros));
-                if let Err(ref err) = res
-                    && err.kind() == std::io::ErrorKind::Interrupted
-                {
-                    // if we got an interrupt, we retry ready events (as we might need to process signals)
-                    let _ = state.io.poll(events, Some(Duration::from_millis(0)));
-                }
-                res
-            })
-        };
+        let poll_result = py.detach(|| state.io.poll(events, sched_time.map(Duration::from_micros)));
 
         //: handle events
         for event in events.iter() {
@@ -279,10 +266,13 @@ impl Runtime {
         let sock = &mut state.sig_sock.0;
         let read = self.read_from_sock(sock, &mut state.buf);
         if read > 0 && self.sig_listening.load(atomic::Ordering::Relaxed) {
+            let handlers = self.sig_handlers.pin();
             for sig in &state.buf[..read] {
-                if let Some(event) = self.sig_handlers.pin().get(sig) {
-                    self.sig_loop_handled.store(true, atomic::Ordering::Relaxed);
+                if let Some(event) = handlers.get(sig) {
                     self.add_io_handle(Box::new(event.clone_ref(py)));
+                } else {
+                    self.sig_loop_unhandled.store(true, atomic::Ordering::Relaxed);
+                    self.stopping.store(true, atomic::Ordering::Release);
                 }
             }
         }
@@ -299,23 +289,18 @@ impl Runtime {
                 .registry()
                 .reregister(&mut *source.lock().unwrap(), Token(TOKEN_SIGNALS), Interest::READABLE);
         }
-        if read == 0 {
+        if read == 0 || !self.sig_listening.load(atomic::Ordering::Relaxed) {
             return;
         }
 
-        let listening = self.sig_listening.load(atomic::Ordering::Relaxed);
-        let mut unhandled = false;
-        {
-            let handlers = self.sig_handlers.pin();
-            for sig in &state.buf[..read] {
-                match handlers.get(sig) {
-                    Some(event) if listening => self.add_io_handle(Box::new(event.clone_ref(py))),
-                    _ => unhandled = true,
-                }
+        let handlers = self.sig_handlers.pin();
+        for sig in &state.buf[..read] {
+            if let Some(event) = handlers.get(sig) {
+                self.add_io_handle(Box::new(event.clone_ref(py)));
+            } else {
+                self.sig_loop_unhandled.store(true, atomic::Ordering::Relaxed);
+                self.stopping.store(true, atomic::Ordering::Release);
             }
-        }
-        if unhandled && let Err(err) = py.check_signals() {
-            state.sig_err = Some(err);
         }
     }
 
@@ -504,7 +489,7 @@ impl Runtime {
             sig_wfd: arc_swap::ArcSwap::new(py.None().into()),
             sig_handlers: papaya::HashMap::with_capacity(32),
             sig_listening: atomic::AtomicBool::new(false),
-            sig_loop_handled: atomic::AtomicBool::new(false),
+            sig_loop_unhandled: atomic::AtomicBool::new(false),
             // sig_wfd: RwLock::new(py.None()),
             stopping: atomic::AtomicBool::new(false),
             ssock_r: arc_swap::ArcSwap::new(py.None().into()),
@@ -657,8 +642,6 @@ impl Runtime {
             buf: vec![0; 4096].into_boxed_slice(),
             io: poll,
             sig_sock,
-            #[cfg(windows)]
-            sig_err: None,
         };
 
         rself.io_registry.swap(Some(Arc::new(registry)));
@@ -700,29 +683,28 @@ impl Runtime {
             }
             if let Err(err) = rself.poll(py, &mut state, &mut events) {
                 if err.kind() == std::io::ErrorKind::Interrupted {
-                    if rself.sig_loop_handled.swap(false, atomic::Ordering::Relaxed) {
-                        continue;
-                    }
-                    let pyerr = match py.check_signals() {
-                        Err(pyerr) => pyerr,
-                        _ => pyo3::exceptions::PyRuntimeError::new_err("Unhandled EINTR in poll loop"),
-                    };
-                    rself.teardown(py, &mut state, threads_cb_cvar);
-                    return Err(pyerr);
+                    continue;
                 }
+                rself.sig_loop_unhandled.swap(false, atomic::Ordering::Relaxed);
                 rself.teardown(py, &mut state, threads_cb_cvar);
                 return Err(err.into());
             }
-            #[cfg(windows)]
-            if let Some(pyerr) = state.sig_err.take() {
-                rself.teardown(py, &mut state, threads_cb_cvar);
-                return Err(pyerr);
-            }
         }
 
+        #[allow(clippy::obfuscated_if_else)]
+        let res = rself
+            .sig_loop_unhandled
+            .swap(false, atomic::Ordering::Relaxed)
+            .then(|| match py.check_signals() {
+                err @ Err(_) => err,
+                _ => Err(pyo3::exceptions::PyRuntimeError::new_err(
+                    "Unhandled signal in poll loop",
+                )),
+            })
+            .unwrap_or(Ok(()));
+
         rself.teardown(py, &mut state, threads_cb_cvar);
-        // rself.stopping.store(false, atomic::Ordering::Release);
-        Ok(())
+        res
     }
 }
 
