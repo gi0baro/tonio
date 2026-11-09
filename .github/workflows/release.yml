@@ -37,6 +37,7 @@ jobs:
           - os: ubuntu
             platform: linux
             target: i686
+            runner: ubuntu-24.04
           - os: ubuntu
             platform: linux
             target: aarch64
@@ -65,7 +66,8 @@ jobs:
           - os: macos
           - os: windows
             target: aarch64
-    runs-on: ${{ matrix.os }}-latest
+
+    runs-on: ${{ matrix.runner || format('{0}-latest', matrix.os) }}
     steps:
       - uses: actions/checkout@v7
       - uses: pyo3/maturin-action@v1
