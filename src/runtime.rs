@@ -684,15 +684,11 @@ impl Runtime {
         rself.work_schedule.swap(Some(schedule.clone()));
 
         let threads_cb_cvar = Arc::new((Mutex::new(n), Condvar::new()));
-        {
-            #[cfg(unix)]
-            let _sigmask = SigMaskGuard::block_all();
-            for (idx, (worker, parker)) in workers.into_iter().zip(parkers).enumerate() {
-                let runtime = pyself.clone_ref(py);
-                let schedule = schedule.clone();
-                let cvar = threads_cb_cvar.clone();
-                thread::spawn(move || work_loop(schedule, runtime, idx, worker, parker, cvar));
-            }
+        for (idx, (worker, parker)) in workers.into_iter().zip(parkers).enumerate() {
+            let runtime = pyself.clone_ref(py);
+            let schedule = schedule.clone();
+            let cvar = threads_cb_cvar.clone();
+            thread::spawn(move || work_loop(schedule, runtime, idx, worker, parker, cvar));
         }
 
         #[cfg(unix)]

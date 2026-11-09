@@ -1,29 +1,6 @@
-const CHILD_ALLOWED: [libc::c_int; 7] = [
-    libc::SIGCHLD,
-    libc::SIGSEGV,
-    libc::SIGBUS,
-    libc::SIGFPE,
-    libc::SIGILL,
-    libc::SIGTRAP,
-    libc::SIGSYS,
-];
-
 pub(crate) struct SigMaskGuard(libc::sigset_t);
 
 impl SigMaskGuard {
-    pub(crate) fn block_all() -> Self {
-        unsafe {
-            let mut set: libc::sigset_t = std::mem::zeroed();
-            let mut old: libc::sigset_t = std::mem::zeroed();
-            libc::sigfillset(&raw mut set);
-            for sig in CHILD_ALLOWED {
-                libc::sigdelset(&raw mut set, sig);
-            }
-            libc::pthread_sigmask(libc::SIG_BLOCK, &raw const set, &raw mut old);
-            Self(old)
-        }
-    }
-
     pub(crate) fn block_sigchld() -> Self {
         unsafe {
             let mut set: libc::sigset_t = std::mem::zeroed();
