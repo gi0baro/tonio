@@ -1,15 +1,10 @@
 import threading
-from typing import Any, Awaitable, Callable, Iterable, ParamSpec, TypeVar
+from typing import Any, Awaitable, Callable, Iterable
 
 from .._tonio import CancelledError, Result, get_runtime
 from ._events import Event
 from ._scope import Scope
 from ._sync import Barrier
-
-
-_T = TypeVar('_T')
-_Params = ParamSpec('_Params')
-_Return = TypeVar('_Return')
 
 
 class _SpawnJoinCollect:
@@ -122,7 +117,9 @@ async def select(*coros: Awaitable[Any]) -> Any:
     return ret
 
 
-async def spawn_blocking(fn: Callable[_Params, _Return], /, *args: _Params.args, **kwargs: _Params.kwargs) -> _Return:
+async def spawn_blocking[**Params, Return](
+    fn: Callable[Params, Return], /, *args: Params.args, **kwargs: Params.kwargs
+) -> Return:
     ctl, event, res = get_runtime()._spawn_blocking(fn, *args, **kwargs)
     try:
         await event.waiter(None)
@@ -144,7 +141,7 @@ async def spawn_blocking(fn: Callable[_Params, _Return], /, *args: _Params.args,
     return val
 
 
-def block_on(coro: Awaitable[_T]) -> _T:
+def block_on[T](coro: Awaitable[T]) -> T:
     ev = threading.Event()
     res = Result()
 
@@ -165,7 +162,7 @@ def block_on(coro: Awaitable[_T]) -> _T:
     return val
 
 
-async def map(fn: Callable[[_T], _Return], /, xs: Iterable[_T]) -> list[_Return]:
+async def map[T, Return](fn: Callable[[T], Return], /, xs: Iterable[T]) -> list[Return]:
     tasks = [fn(x) for x in xs]
     ret = await spawn(*tasks)
     if len(tasks) == 1:
@@ -173,7 +170,7 @@ async def map(fn: Callable[[_T], _Return], /, xs: Iterable[_T]) -> list[_Return]
     return ret
 
 
-async def map_blocking(fn: Callable[[_T], _Return], /, xs: Iterable[_T]) -> list[_Return]:
+async def map_blocking[T, Return](fn: Callable[[T], Return], /, xs: Iterable[T]) -> list[Return]:
     tasks = [spawn_blocking(fn, x) for x in xs]
     ret = await spawn(*tasks)
     if len(tasks) == 1:

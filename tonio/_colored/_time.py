@@ -1,11 +1,8 @@
-from typing import Awaitable, TypeVar
+from typing import Awaitable
 
 from .._time import _Interval, time
 from .._tonio import CancelledError, Result, Waiter, get_runtime
 from ._events import Event
-
-
-_T = TypeVar('_T')
 
 
 class Interval(_Interval):
@@ -20,7 +17,7 @@ def sleep(timeout: int | float) -> Awaitable[None]:
     return Event().wait(timeout)
 
 
-async def timeout(coro: Awaitable[_T], timeout: int | float) -> tuple[None | _T, bool]:
+async def timeout[T](coro: Awaitable[T], timeout: int | float) -> tuple[None | T, bool]:
     done = Event()
     res = Result()
     checkpoint = Waiter.checkpoint()

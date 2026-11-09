@@ -14,9 +14,7 @@ from typing import IO, TYPE_CHECKING, Any, AnyStr, BinaryIO, Literal, overload
 
 from ..._fs._file import (
     _FILE_ASYNC_METHODS,
-    FileT,
     FileT_co,
-    T,
     _IOWrapper,
     _Opener,
     _OpenFile,
@@ -69,7 +67,7 @@ class IOWrapper(_IOWrapper[FileT_co]):
             return line
         raise StopAsyncIteration
 
-    async def detach(self: IOWrapper[_CanDetach[T]]) -> IOWrapper[T]:
+    async def detach[T](self: IOWrapper[_CanDetach[T]]) -> IOWrapper[T]:
         raw = await spawn_blocking(self._wrapped.detach)
         return wrap_file(raw)
 
@@ -86,8 +84,8 @@ class IOWrapper(_IOWrapper[FileT_co]):
         async def seek(self: IOWrapper[_CanSeek], target: int, whence: int = 0, /) -> int: ...
         async def tell(self: IOWrapper[_CanTell]) -> int: ...
         async def truncate(self: IOWrapper[_CanTruncate], size: int | None = None, /) -> int: ...
-        async def write(self: IOWrapper[_CanWrite[T]], data: T, /) -> int: ...
-        async def writelines(self: IOWrapper[_CanWriteLines[T]], lines: Iterable[T], /) -> None: ...
+        async def write[T](self: IOWrapper[_CanWrite[T]], data: T, /) -> int: ...
+        async def writelines[T](self: IOWrapper[_CanWriteLines[T]], lines: Iterable[T], /) -> None: ...
         async def readinto1(self: IOWrapper[_CanReadInto1], buffer: Any, /) -> int: ...
         async def peek(self: IOWrapper[_CanPeek[AnyStr]], size: int = 0, /) -> AnyStr: ...
 
@@ -95,7 +93,7 @@ class IOWrapper(_IOWrapper[FileT_co]):
 if not TYPE_CHECKING:
 
     def _async_file_impl(name):
-        def wrapper(self, /, *args: Callable[..., T], **kwargs: Any) -> Coroutine[T]:
+        def wrapper[T](self, /, *args: Callable[..., T], **kwargs: Any) -> Coroutine[T]:
             return spawn_blocking(getattr(self._wrapped, name), *args, **kwargs)
 
         wrapper.__name__ = wrapper.__qualname__ = name
@@ -222,7 +220,7 @@ async def open_file(
     return wrap_file(file_)
 
 
-def wrap_file(file: FileT) -> IOWrapper[FileT]:
+def wrap_file[FileT](file: FileT) -> IOWrapper[FileT]:
     def has(attr: str) -> bool:
         return hasattr(file, attr) and callable(getattr(file, attr))
 

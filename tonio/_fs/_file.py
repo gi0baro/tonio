@@ -58,13 +58,10 @@ _FILE_ASYNC_METHODS: set[str] = {
 }
 
 
-FileT = TypeVar('FileT')
 FileT_co = TypeVar('FileT_co', covariant=True)
-T = TypeVar('T')
 T_co = TypeVar('T_co', covariant=True)
 T_contra = TypeVar('T_contra', contravariant=True)
 AnyStr_co = TypeVar('AnyStr_co', str, bytes, covariant=True)
-AnyStr_contra = TypeVar('AnyStr_contra', str, bytes, contravariant=True)
 
 
 if TYPE_CHECKING:
@@ -201,7 +198,7 @@ class _IOWrapper(Generic[FileT_co]):
         return self._wrapped.errors
 
     @property
-    def newlines(self: _IOWrapper[_HasNewlines[T]]) -> T:
+    def newlines[T](self: _IOWrapper[_HasNewlines[T]]) -> T:
         return self._wrapped.newlines
 
     @property
@@ -257,7 +254,7 @@ class IOWrapper(_IOWrapper[FileT_co]):
     def __exit__(self: IOWrapper[_CanClose], *exc_info: object) -> None:
         return
 
-    def detach(self: IOWrapper[_CanDetach[T]]) -> Coro[IOWrapper[T]]:
+    def detach[T](self: IOWrapper[_CanDetach[T]]) -> Coro[IOWrapper[T]]:
         raw = yield spawn_blocking(self._wrapped.detach)
         return wrap_file(raw)
 
@@ -274,8 +271,8 @@ class IOWrapper(_IOWrapper[FileT_co]):
         def seek(self: IOWrapper[_CanSeek], target: int, whence: int = 0, /) -> Coro[int]: ...
         def tell(self: IOWrapper[_CanTell]) -> Coro[int]: ...
         def truncate(self: IOWrapper[_CanTruncate], size: int | None = None, /) -> Coro[int]: ...
-        def write(self: IOWrapper[_CanWrite[T]], data: T, /) -> Coro[int]: ...
-        def writelines(self: IOWrapper[_CanWriteLines[T]], lines: Iterable[T], /) -> Coro[None]: ...
+        def write[T](self: IOWrapper[_CanWrite[T]], data: T, /) -> Coro[int]: ...
+        def writelines[T](self: IOWrapper[_CanWriteLines[T]], lines: Iterable[T], /) -> Coro[None]: ...
         def readinto1(self: IOWrapper[_CanReadInto1], buffer: Any, /) -> Coro[int]: ...
         def peek(self: IOWrapper[_CanPeek[AnyStr]], size: int = 0, /) -> Coro[AnyStr]: ...
 
@@ -283,7 +280,7 @@ class IOWrapper(_IOWrapper[FileT_co]):
 if not TYPE_CHECKING:
 
     def _async_file_impl(name):
-        def wrapper(self, /, *args: Callable[..., T], **kwargs: Any) -> Coro[T]:
+        def wrapper[T](self, /, *args: Callable[..., T], **kwargs: Any) -> Coro[T]:
             return spawn_blocking(getattr(self._wrapped, name), *args, **kwargs)
 
         wrapper.__name__ = wrapper.__qualname__ = name
@@ -414,7 +411,7 @@ def open_file(
     return wrap_file(file_)
 
 
-def wrap_file(file: FileT) -> IOWrapper[FileT]:
+def wrap_file[FileT](file: FileT) -> IOWrapper[FileT]:
     def has(attr: str) -> bool:
         return hasattr(file, attr) and callable(getattr(file, attr))
 
